@@ -26,6 +26,8 @@ class Request:
     hash_seed: int | None
     snapshot: list[str] = field(default_factory=list)
     label: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+    clock: str | None = None
 
 
 class Executor:
@@ -57,6 +59,8 @@ class Executor:
             hash_seed=req.hash_seed,
             snapshot=list(req.snapshot),
             label=req.label,
+            env=dict(req.env),
+            clock=req.clock,
         )
 
     def run_many(self, requests: Sequence[Request]) -> list[RunResult]:

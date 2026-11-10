@@ -18,7 +18,6 @@ from flakehound.adapters.pytest.runner import PytestRunner
 from flakehound.core.models import RunResult
 from flakehound.core.procs import ProcessRegistry
 from flakehound.detectors.shake import Verdict
-from flakehound.diagnosis.order import OrderDiagnosis
 from flakehound.report import terminal
 from flakehound.report.json_report import write_json
 
@@ -52,7 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="run the test suite many times under varied conditions",
         description=(
             "Runs your pytest suite several times with shuffled order and varied seeds, "
-            "then reports which tests are flaky. WARNING: this executes your test code; "
+            "plus probe runs in other timezones and on risky dates, then reports and explains "
+            "flaky tests and time bombs. WARNING: this executes your test code; "
             "only run it on code you trust. Extra pytest arguments go after '--'."
         ),
     )
@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=20,
         help="diagnose at most this many flaky tests (default 20)",
+    )
+    run.add_argument(
+        "--no-probes",
+        action="store_true",
+        help="skip the timezone and danger-date probe runs (time bomb detection)",
     )
     return parser
 
@@ -113,16 +118,16 @@ def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> in
     )
     task = progress.add_task("collecting tests", total=None)
 
-    def collected(n: int) -> None:
-        progress.update(task, description=f"running {n} tests", total=args.runs)
+    def collected(n_tests: int, n_runs: int) -> None:
+        progress.update(task, description=f"running {n_tests} tests", total=n_runs)
 
     def finished(_: RunResult) -> None:
         progress.advance(task)
 
     def diagnose_start(n: int) -> None:
-        progress.update(task, description=f"diagnosing {n} flaky tests", total=n, completed=0)
+        progress.update(task, description=f"diagnosing {n} tests", total=n, completed=0)
 
-    def diagnosed(_: OrderDiagnosis) -> None:
+    def diagnosed(_: str) -> None:
         progress.advance(task)
 
     try:
@@ -135,6 +140,7 @@ def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> in
                 master_seed=seed,
                 diagnose=not args.no_diagnose,
                 max_diagnose=args.max_diagnose,
+                probe=not args.no_probes,
                 on_collected=collected,
                 on_result=finished,
                 on_diagnose_start=diagnose_start,
@@ -155,7 +161,8 @@ def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> in
     if args.json is not None:
         write_json(report, args.json)
         console.print(f"[dim]JSON report written to {args.json}[/]", highlight=False)
-    return EXIT_FLAKY if report.by_verdict(Verdict.FLAKY) else EXIT_OK
+    problems = report.by_verdict(Verdict.FLAKY) or report.time_bombs
+    return EXIT_FLAKY if problems else EXIT_OK
 
 
 def main(argv: Sequence[str] | None = None) -> int:

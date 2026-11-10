@@ -58,6 +58,8 @@ _SKIP_DIRS = {
     ".eggs",
 }
 _SKIP_MODULE_PREFIXES = ("flakehound", "_pytest", "pytest", "pluggy", "py.")
+# Set and cleared by pytest itself around every test: never "leaked state".
+_IGNORED_ENV = {"PYTEST_CURRENT_TEST"}
 _SECRET_ENV_NAME = re.compile(r"(?i)(pass|secret|token|key|auth|credential|cookie|session)")
 
 _repr = reprlib.Repr()
@@ -177,7 +179,8 @@ def take(root: Path) -> Snapshot:
     for kind, name, rep in _module_state(root):
         v[(kind, name)] = rep
     for key, value in os.environ.items():
-        v[("env", key)] = _env_value(key, value)
+        if key not in _IGNORED_ENV:
+            v[("env", key)] = _env_value(key, value)
     try:
         v[("cwd", "current directory")] = redact(os.getcwd())
     except OSError:

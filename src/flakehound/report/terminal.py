@@ -10,12 +10,22 @@ from rich.text import Text
 
 from flakehound import __version__
 from flakehound.detectors.shake import TestStats, Verdict
+from flakehound.diagnosis.env import EnvCause, EnvDiagnosis
 from flakehound.diagnosis.order import OrderDiagnosis, OrderKind
 from flakehound.session import Report
 
 _STYLE = {
     Verdict.FLAKY: "bold black on yellow",
     Verdict.BROKEN: "bold white on red",
+}
+_BOMB_STYLE = "bold white on dark_orange3"
+_ENV_CAUSE = {
+    EnvCause.RANDOM_SEED: "RANDOMNESS",
+    EnvCause.HASH_SEED: "SET/DICT ORDER (hash seed)",
+    EnvCause.SEEDS_COMBINED: "RANDOMNESS + SET/DICT ORDER",
+    EnvCause.NONDETERMINISTIC: "NONDETERMINISTIC (not order, not seeds)",
+    EnvCause.TIMEZONE: "TIMEZONE",
+    EnvCause.CLOCK: "DATE/CLOCK",
 }
 _MAX_RUN_IDS = 8
 
@@ -126,16 +136,56 @@ def _print_diagnosis(console: Console, d: OrderDiagnosis) -> None:
         )
     if d.fix:
         _field(console, "Fix", escape(d.fix))
-    if d.repro:
-        tag = ""
-        if d.repro_verified is True:
-            tag = "[green](verified)[/]"
-        elif d.repro_verified is False:
-            tag = "[yellow](did not reproduce outside flakehound)[/]"
-        _field(console, "Repro", f"{escape(shlex.join(d.repro))} {tag}")
+    _print_repro(console, d.repro, {}, d.repro_verified)
 
 
-def _print_test(console: Console, s: TestStats, diag: OrderDiagnosis | None = None) -> None:
+def _print_repro(
+    console: Console, repro: list[str], env: dict[str, str], verified: bool | None
+) -> None:
+    if not repro:
+        return
+    tag = ""
+    if verified is True:
+        tag = "[green](verified)[/]"
+    elif verified is False:
+        tag = "[yellow](did not reproduce outside flakehound)[/]"
+    env_part = [f"{k}={v}" for k, v in env.items()]
+    _field(console, "Repro", f"{escape(shlex.join([*env_part, *repro]))} {tag}")
+
+
+def _print_env(console: Console, d: EnvDiagnosis) -> None:
+    if d.cause is EnvCause.INCONCLUSIVE:
+        _field(console, "Cause", f"[dim]unknown: {escape(d.note)}[/]")
+        return
+    status = "confirmed" if d.confirmed else "suspected"
+    _field(console, "Cause", f"[bold magenta]{_ENV_CAUSE[d.cause]}[/] ({status})")
+    if d.condition and not d.latent:
+        _field(console, "Fails", f"with {escape(d.condition)}")
+    for i, line in enumerate(d.evidence):
+        if i == 0:
+            _field(console, "Evidence", escape(line))
+        else:
+            console.print(f"{_PAD}{escape(line)}", highlight=False)
+    if d.note:
+        _field(console, "Note", f"[yellow]{escape(d.note)}[/]")
+    if d.fix:
+        _field(console, "Fix", escape(d.fix))
+    _print_repro(console, d.repro, d.repro_env, d.repro_verified)
+
+
+def _print_time_bomb(console: Console, d: EnvDiagnosis) -> None:
+    console.print(Text(" TIME BOMB ", style=_BOMB_STYLE), Text(d.nodeid, style="bold"))
+    console.print(f"   passes today, but fails [bold]{escape(d.condition)}[/]", highlight=False)
+    _print_env(console, d)
+    console.print()
+
+
+def _print_test(
+    console: Console,
+    s: TestStats,
+    diag: OrderDiagnosis | None = None,
+    env: EnvDiagnosis | None = None,
+) -> None:
     sym = _sym(console)
     label = Text(f" {s.verdict.value.upper()} ", style=_STYLE[s.verdict])
     console.print(label, Text(s.nodeid, style="bold"))
@@ -146,11 +196,16 @@ def _print_test(console: Console, s: TestStats, diag: OrderDiagnosis | None = No
             f"({_pct(s.failure_rate)}, 95% CI {_pct(lo)}{sym.dash}{_pct(hi)})",
             highlight=False,
         )
-        if diag is not None:
+        order_proven = diag is not None and diag.is_order and diag.confirmed
+        if not order_proven and env is not None and env.cause is not EnvCause.INCONCLUSIVE:
+            _print_env(console, env)
+        elif diag is not None:
             _print_diagnosis(console, diag)
     else:
         console.print(
-            f"   failed in every run ({s.failures}/{s.runs}): a real failure, not flakiness",
+            f"   failed in every run ({s.failures}/{s.runs}): looks like a real bug, not "
+            f"flakiness [dim](if it is flaky, it passes under {_pct(s.max_pass_rate)} of the "
+            "time)[/]",
             highlight=False,
         )
     for text, count in s.top_messages(2):
@@ -167,7 +222,9 @@ def print_report(console: Console, report: Report) -> None:
     flaky = report.by_verdict(Verdict.FLAKY)
     broken = report.by_verdict(Verdict.BROKEN)
     for s in flaky + broken:
-        _print_test(console, s, report.diagnoses.get(s.nodeid))
+        _print_test(console, s, report.diagnoses.get(s.nodeid), report.env_diagnoses.get(s.nodeid))
+    for bomb in report.time_bombs:
+        _print_time_bomb(console, bomb)
     if report.not_diagnosed:
         console.print(
             f"[dim]{report.not_diagnosed} more flaky tests were not diagnosed "
@@ -189,12 +246,16 @@ def print_report(console: Console, report: Report) -> None:
         f"[bold red]{len(broken)} broken[/]" if broken else "0 broken",
         f"{len(report.by_verdict(Verdict.STABLE))} stable",
     ]
+    if report.probes:
+        bombs = len(report.time_bombs)
+        parts.insert(2, f"[bold dark_orange3]{bombs} time bombs[/]" if bombs else "0 time bombs")
     skipped = len(report.by_verdict(Verdict.SKIPPED))
     if skipped:
         parts.append(f"{skipped} skipped")
     console.print(
         f" {sym.dot} ".join(parts)
         + f"  [dim]({len(report.test_ids)} tests {sym.times} {report.runs} runs"
+        + (f" + {len(report.probes)} probe runs" if report.probes else "")
         + (f" + {report.diagnosis_runs} diagnosis runs" if report.diagnosis_runs else "")
         + f" in {report.duration:.1f}s)[/]",
         highlight=False,

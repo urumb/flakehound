@@ -45,6 +45,19 @@ class StateChange:
 
 
 @dataclass(frozen=True)
+class Repro:
+    """How a user can reproduce a finding with their normal test runner."""
+
+    order: list[str]  # tests to run, in this order; the last one is the one that fails
+    env: dict[str, str] = field(default_factory=dict)  # e.g. {"TZ": "FHT-14"}
+    seed: int | None = None  # replay flakehound's per-test random seed
+    clock: str | None = None  # shifted wall clock start
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class RunSpec:
     """One experiment: run these tests, in this order, under these conditions."""
 
@@ -56,6 +69,8 @@ class RunSpec:
     label: str = ""
     # Tests to snapshot global state around (before setup, after teardown).
     snapshot: list[str] = field(default_factory=list)
+    # Local wall time the clock should read at start, e.g. "2026-12-31T23:59:58".
+    clock: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,6 +85,7 @@ class RunSpec:
             env={str(k): str(v) for k, v in data.get("env", {}).items()},
             label=str(data.get("label", "")),
             snapshot=[str(x) for x in data.get("snapshot", [])],
+            clock=None if data.get("clock") is None else str(data["clock"]),
         )
 
 

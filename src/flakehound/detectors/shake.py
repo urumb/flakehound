@@ -42,6 +42,33 @@ def plan_runs(test_ids: list[str], runs: int, master_seed: int) -> list[RunSpec]
     return specs
 
 
+RECHECK_RUNS = 4
+
+
+def plan_rechecks(
+    broken: list[str], master_seed: int, first_id: int, per_test: int = RECHECK_RUNS
+) -> list[RunSpec]:
+    """Extra runs for tests that failed every time: alone, with fresh seeds.
+
+    A test that passes only 1 time in 6 can fail all of a small number of runs
+    by chance. Rechecking catches some of those before we call them broken.
+    """
+    rng = random.Random(f"recheck:{master_seed}")  # noqa: S311 - reproducible, not crypto
+    specs: list[RunSpec] = []
+    for nodeid in broken:
+        for _ in range(per_test):
+            specs.append(
+                RunSpec(
+                    run_id=first_id + len(specs),
+                    order=[nodeid],
+                    seed=rng.randrange(2**32),
+                    hash_seed=rng.randrange(_MAX_HASH_SEED + 1),
+                    label="recheck alone",
+                )
+            )
+    return specs
+
+
 class Verdict(str, Enum):
     FLAKY = "flaky"  # passed in some runs, failed in others
     BROKEN = "broken"  # failed in every run: a real failure, not flakiness
@@ -79,6 +106,11 @@ class TestStats:
     @property
     def interval(self) -> tuple[float, float]:
         return wilson_interval(self.failures, self.runs)
+
+    @property
+    def max_pass_rate(self) -> float:
+        """Upper 95% bound on how often it could pass (meaningful for BROKEN)."""
+        return wilson_interval(self.runs - self.failures, self.runs)[1]
 
     def top_messages(self, n: int = 3) -> list[tuple[str, int]]:
         """Most common failures as (example text, count), grouped by location."""

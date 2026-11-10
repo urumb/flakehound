@@ -7,21 +7,29 @@ What it does, only when flakehound passes its options:
 * keeps exactly the tests in the run spec, in the spec's order;
 * seeds ``random`` per test from the spec seed (deterministic and independent of order);
 * writes one JSON result per test (redacted failure message included);
-* snapshots global state around the tests listed in ``spec.snapshot``.
+* snapshots global state around the tests listed in ``spec.snapshot``;
+* shifts the wall clock when the spec asks for it.
+
+Two options are also meant for humans, to replay what flakehound found with
+plain pytest: ``--flakehound-seed=N`` (seed ``random`` per test exactly like a
+flakehound run) and ``--flakehound-clock=2026-12-31T23:59:58`` (shift the clock).
 """
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 import os
 import random
+import sys
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from flakehound.adapters.pytest import snapshot
+from flakehound.adapters.pytest import clock, snapshot
 from flakehound.core.models import Outcome, RunSpec, StateChange, TestResult
 from flakehound.report.redact import redact, truncate
 
@@ -33,11 +41,30 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption("--flakehound-spec", default=None, help="internal: run spec JSON")
     group.addoption("--flakehound-out", default=None, help="internal: results JSON")
     group.addoption("--flakehound-collect-out", default=None, help="internal: collected ids JSON")
+    group.addoption(
+        "--flakehound-seed",
+        type=int,
+        default=None,
+        help="seed `random` per test like flakehound does (to replay a finding)",
+    )
+    group.addoption(
+        "--flakehound-clock",
+        default=None,
+        metavar="ISO_DATETIME",
+        help="make the wall clock start at this local time, e.g. 2026-12-31T23:59:58",
+    )
 
 
 class _Worker:
-    def __init__(self, spec: RunSpec | None, out: Path | None, collect_out: Path | None) -> None:
+    def __init__(
+        self,
+        spec: RunSpec | None,
+        out: Path | None,
+        collect_out: Path | None,
+        seed: int | None = None,
+    ) -> None:
         self.spec = spec
+        self.seed = spec.seed if spec is not None else seed
         self.out = out
         self.collect_out = collect_out
         self.results: dict[str, TestResult] = {}
@@ -65,10 +92,8 @@ class _Worker:
     # --- determinism ------------------------------------------------------
     @pytest.hookimpl(tryfirst=True)
     def pytest_runtest_setup(self, item: pytest.Item) -> None:
-        if self.spec is not None:
-            # String seeds are hashed with SHA-512 by `random`, so this is
-            # stable across processes and PYTHONHASHSEED values.
-            random.seed(f"{self.spec.seed}:{item.nodeid}")
+        if self.seed is not None:
+            seed_for_test(self.seed, item.nodeid)
 
     # --- state snapshots ----------------------------------------------------
     @pytest.hookimpl(hookwrapper=True)
@@ -129,6 +154,21 @@ class _Worker:
         )
 
 
+def seed_for_test(seed: int, nodeid: str) -> None:
+    """Seed the global RNGs for one test, independent of test order.
+
+    String seeds are hashed with SHA-512 by `random`, so this is stable across
+    processes and PYTHONHASHSEED values.
+    """
+    key = f"{seed}:{nodeid}"
+    random.seed(key)
+    numpy = sys.modules.get("numpy")  # only if the project already uses it
+    if numpy is not None:
+        digest = hashlib.sha256(key.encode()).digest()
+        with contextlib.suppress(Exception):
+            numpy.random.seed(int.from_bytes(digest[:4], "big"))
+
+
 def _phase_outcome(report: pytest.TestReport) -> Outcome | None:
     if report.when == "call":
         if report.passed:
@@ -160,16 +200,25 @@ def pytest_configure(config: pytest.Config) -> None:
     spec_path = config.getoption("flakehound_spec")
     out_path = config.getoption("flakehound_out")
     collect_path = config.getoption("flakehound_collect_out")
-    if not (spec_path or collect_path):
+    user_seed = config.getoption("flakehound_seed")
+    user_clock = config.getoption("flakehound_clock")
+    if not (spec_path or collect_path or user_seed is not None or user_clock):
         return
     spec = None
     if spec_path:
         spec = RunSpec.from_json(json.loads(Path(spec_path).read_text(encoding="utf-8")))
+    target_clock = spec.clock if spec is not None else user_clock
+    if target_clock:
+        try:
+            clock.install(target_clock, str(config.rootpath))
+        except ValueError as exc:
+            raise pytest.UsageError(f"--flakehound-clock: {exc}") from exc
     config.pluginmanager.register(
         _Worker(
             spec,
             Path(out_path) if out_path else None,
             Path(collect_path) if collect_path else None,
+            seed=user_seed,
         ),
         "flakehound-worker",
     )

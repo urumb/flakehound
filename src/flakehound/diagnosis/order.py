@@ -17,14 +17,17 @@ The method changes one factor at a time:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 from flakehound.adapters.base import Runner
-from flakehound.core.executor import Executor, Request
-from flakehound.core.models import Outcome, RunResult, RunSpec, StateChange
+from flakehound.core.executor import Executor
+from flakehound.core.models import Repro, RunResult, StateChange
+from flakehound.diagnosis.common import failed as _failed
+from flakehound.diagnosis.common import request as _request
+from flakehound.diagnosis.common import verify_repro
 from flakehound.diagnosis.ddmin import ddmin
 from flakehound.diagnosis.fixes import suggest_fix
 
@@ -101,21 +104,6 @@ class OrderDiagnosis:
             "note": self.note,
             "runs_used": self.runs_used,
         }
-
-
-def _failed(result: RunResult, nodeid: str) -> bool | None:
-    """True/False if ``nodeid`` failed/passed in ``result``; None if it didn't run."""
-    if result.crashed:
-        return None
-    outcome = result.outcome_of(nodeid)
-    if outcome is None or outcome is Outcome.SKIPPED:
-        return None
-    return outcome.is_failure
-
-
-def _request(spec: RunSpec, order: list[str], **kw: Any) -> Request:
-    """Same conditions (seeds) as ``spec``, different order: one factor at a time."""
-    return Request(order=order, seed=spec.seed, hash_seed=spec.hash_seed, **kw)
 
 
 def _rank_candidates(victim: str, runs: Sequence[RunResult], *, want_fail: bool) -> list[str]:
@@ -257,22 +245,12 @@ def _diagnose(
     diag.evidence = _evidence(victim, diag.culprits, shake_runs)
 
     # 4. A plain pytest command that shows the problem, verified for real.
-    repro_order = order if kind is OrderKind.POLLUTED else [victim]
-    diag.repro = runner.repro_command(repro_order)
-    env = {} if run.spec.hash_seed is None else {"PYTHONHASHSEED": str(run.spec.hash_seed)}
-    diag.repro_verified = _check(runner.check_repro, repro_order, env)
+    repro = Repro(order if kind is OrderKind.POLLUTED else [victim])
+    diag.repro = runner.repro_command(repro)
+    diag.repro_verified = verify_repro(runner, repro)
     return diag
 
 
 def _in_order(tests: list[str], reference: list[str]) -> list[str]:
     pos = {t: i for i, t in enumerate(reference)}
     return sorted(tests, key=lambda t: pos.get(t, len(pos)))
-
-
-def _check(
-    fn: Callable[[Sequence[str], dict[str, str]], bool], order: list[str], env: dict[str, str]
-) -> bool:
-    try:
-        return fn(order, env)
-    except OSError:
-        return False

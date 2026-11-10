@@ -17,7 +17,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from flakehound.adapters.base import CollectionError
-from flakehound.core.models import RunResult, RunSpec, StateChange, TestResult
+from flakehound.core.models import Repro, RunResult, RunSpec, StateChange, TestResult
 from flakehound.core.procs import ProcessRegistry
 from flakehound.report.redact import redact, truncate
 
@@ -112,26 +112,33 @@ class PytestRunner:
             error = truncate(redact(f"worker exited with code {res.returncode}:\n{tail}"))
         return RunResult(spec, results, res.returncode, duration, crashed, error, state_changes)
 
-    def repro_command(self, order: Sequence[str]) -> list[str]:
-        """A plain pytest command (no flakehound needed) that runs ``order`` in order.
+    def repro_command(self, repro: Repro) -> list[str]:
+        """A pytest command that reproduces a finding (env vars are listed separately).
 
         pytest runs explicitly listed test ids in the order they are given.
+        Seed and clock replay need flakehound installed (they use its plugin).
         """
-        return ["pytest", "-p", "no:randomly", "-p", "no:cacheprovider", *order]
+        cmd = ["pytest", "-p", "no:randomly", "-p", "no:cacheprovider"]
+        if repro.seed is not None or repro.clock is not None:
+            cmd += ["-p", PLUGIN]
+        if repro.seed is not None:
+            cmd.append(f"--flakehound-seed={repro.seed}")
+        if repro.clock is not None:
+            cmd.append(f"--flakehound-clock={repro.clock}")
+        return [*cmd, *repro.order]
 
-    def check_repro(self, order: Sequence[str], env: Mapping[str, str]) -> bool:
+    def check_repro(self, repro: Repro) -> bool:
         """Run :meth:`repro_command` for real; True if the last test failed.
 
-        This proves the command we print actually reproduces the failure,
-        without our plugin's help. The last test's outcome is read from a
-        JUnit XML report (part of pytest itself).
+        This proves the exact command we print reproduces the failure. The last
+        test's outcome is read from a JUnit XML report (part of pytest itself).
         """
-        cmd = [self.python, "-m", *self.repro_command(order)]
+        cmd = [self.python, "-m", *self.repro_command(repro)]
         with tempfile.TemporaryDirectory(prefix="flakehound-repro-") as tmp:
             xml = Path(tmp) / "repro.xml"
             run_env = dict(self.base_env)
             run_env["PYTHONDONTWRITEBYTECODE"] = "1"
-            run_env.update(env)
+            run_env.update(repro.env)
             res = self.procs.run(
                 [*cmd, "-q", f"--junitxml={xml}"],
                 cwd=self.project_dir,
@@ -140,7 +147,7 @@ class PytestRunner:
             )
             if res.timed_out or not xml.exists():
                 return False
-            return _last_test_failed(xml, order[-1])
+            return _last_test_failed(xml, repro.order[-1])
 
 
 def _last_test_failed(xml_path: Path, nodeid: str) -> bool:
