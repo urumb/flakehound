@@ -6,14 +6,15 @@
 
 **Find flaky tests and prove *why* they're flaky.**
 
-> 🚧 Early development (milestone 3 of 6). Not on PyPI yet.
+> 🚧 Early development (milestone 4 of 6). Not on PyPI yet.
 
 Flaky tests pass sometimes and fail sometimes with no code change. Most tools just
 retry them, which hides the problem. flakehound runs your pytest suite under
 deliberately hostile conditions, finds the tests that flip between pass and fail,
-and explains the cause with evidence from real runs. It also finds **time bombs**:
-tests that pass today but will fail on the last day of the month, on Feb 29, or on a
-CI machine in another timezone.
+and explains the cause with evidence from real runs. It also finds problems that
+haven't bitten you *yet*: **time bombs** (tests that will fail on the last day of the
+month, on Feb 29, or on a CI machine in another timezone) and **racy tests** (a
+`sleep()` used as a wait that breaks on a slow machine, or a race between threads).
 
 - 🆓 **Free forever.** No accounts, no servers, no paid services.
 - 🔒 **Local and private.** Offline, no telemetry, secrets redacted from every report.
@@ -77,7 +78,21 @@ Real output on the [demo project](demo/) (trimmed):
    Repro:    TZ=FHT+12 pytest -p no:randomly -p no:cacheprovider
              tests/test_dates.py::test_order_date_matches_utc (verified)
 
-5 flaky · 0 broken · 3 time bombs · 9 stable  (14 tests × 16 runs + 6 probe runs + ...)
+ RACY  tests/test_upload.py::test_upload_finishes
+   passes normally, but fails when the `sleep(0.06)` at tests/test_upload.py:9 is shorter
+   (a slower machine)
+   Cause:    TIMING (sleep used as a wait) (confirmed)
+   Fix:      `sleep(0.06)` at tests/test_upload.py:9 is used to wait for work that isn't
+             guaranteed to be finished; wait for the actual event instead ...
+   Repro:    pytest ... --flakehound-sleep-scale=0.1
+             --flakehound-sleep-sites=tests/test_upload.py:9 tests/test_upload.py::test_upload_finishes (verified)
+
+ RACY  tests/test_wallet.py::test_concurrent_top_ups
+   passes normally, but fails when threads switch more often (a race condition)
+   Cause:    RACE CONDITION (confirmed)
+   Evidence: alone, with frequent thread switches: failed 4/4; normal: failed 0/2
+
+5 flaky · 0 broken · 3 time bombs · 2 racy · 10 stable  (15 tests × 12 runs + 8 probe runs + ...)
 ```
 
 ### Options
@@ -91,13 +106,15 @@ Real output on the [demo project](demo/) (trimmed):
 | `--timeout S` | Kill a single run after S seconds (default 600) |
 | `--no-diagnose` | Only detect flaky tests, don't explain them |
 | `--max-diagnose N` | Diagnose at most N flaky tests (default 20) |
-| `--no-probes` | Skip the timezone and danger-date probe runs |
+| `--no-probes` | Skip all probe runs (timezones, risky dates, timing) |
+| `--no-timing` | Skip only the timing probes (shorter sleeps, thread stress) |
 | `-- ARGS` | Anything after `--` goes straight to pytest |
 
-Exit codes: `0` no problems, `1` flaky tests or time bombs found, `2` usage or collection error.
+Exit codes: `0` no problems, `1` flaky, time bomb or racy tests found, `2` usage or collection error.
 
-Repro commands that replay a seed or clock use flakehound's pytest plugin
-(`--flakehound-seed`, `--flakehound-clock`), so they need flakehound installed. It never
+Repro commands that replay a seed, clock or timing stress use flakehound's pytest plugin
+(`--flakehound-seed`, `--flakehound-clock`, `--flakehound-sleep-scale`,
+`--flakehound-switch-interval`), so they need flakehound installed. It never
 loads into your normal pytest runs unless you pass `-p flakehound.adapters.pytest.plugin`.
 
 ## How it works
@@ -124,7 +141,12 @@ flakehound changes **one factor at a time**, like a science experiment:
    in UTC+14, UTC−12, two seconds before midnight, on the last day of the month, on
    New Year's Eve and on Feb 29. The clock is *shifted* (it keeps ticking), so code
    that waits on time still works; `monotonic`, `sleep` and timeouts stay real.
-7. **Confirm and verify.** Every finding is re-run, and the printed repro command is
+7. **Timing probes.** Two more runs: one where every `sleep()` the test makes on its
+   main thread is 20× shorter (background threads keep their real speed, like a slow
+   machine for whatever the test waits on), and one where threads switch far more
+   often (`sys.setswitchinterval`). A test that fails there is *racy*. flakehound then
+   shortens one `sleep()` call site at a time to point at the exact line.
+8. **Confirm and verify.** Every finding is re-run, and the printed repro command is
    run for real and marked *verified* only if it fails exactly as printed.
 
 ## Roadmap
@@ -132,7 +154,7 @@ flakehound changes **one factor at a time**, like a science experiment:
 - [x] **M1** Core engine, parallel shuffled runs, terminal + JSON reports, demo
 - [x] **M2** Order dependency: isolation, polluter/setter search, *which state leaked*, verified repros
 - [x] **M3** Environment: random seed vs hash seed, timezone and danger-date time bombs
-- [ ] **M4** Timing: sleep shrinking, thread-switch stress, CPU load
+- [x] **M4** Timing: sleeps used as waits (exact line) and race conditions
 - [ ] **M5** Verified repro commands, Markdown/PR output, CI mode, quarantine
 - [ ] **M6** First PyPI release
 - Later: GitHub Actions history mode, Jest/Go/JUnit adapters, optional local-AI explanations
