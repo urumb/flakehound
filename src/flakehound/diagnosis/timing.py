@@ -27,7 +27,7 @@ from flakehound.diagnosis.env import EnvCause, EnvDiagnosis
 SLEEP_SCALE = 0.1
 SWITCH_INTERVAL = 1e-6
 MAX_SITES = 5
-SHORT_TRIALS = 2
+SHORT_TRIALS = 3  # majority vote: sleeps overshoot on busy machines (e.g. macOS CI)
 NORMAL_TRIALS = 2
 STRESS_TRIALS = 4
 REPRO_ATTEMPTS = 3  # races are probabilistic: a repro may need a few tries
@@ -66,14 +66,25 @@ def _suspected(
     return diag
 
 
+def _majority(fails: int, total: int) -> bool:
+    """At least two thirds failed (2/3, 3/4, ...)."""
+    return total > 0 and fails * 3 >= total * 2
+
+
 def _fails(results: Sequence[bool | None]) -> tuple[int, int]:
     valid = [r for r in results if r is not None]
     return sum(valid), len(valid)
 
 
 def _sites_from(sleep_sites: Sequence[dict[str, Any]]) -> list[tuple[str, float]]:
-    ranked = sorted(sleep_sites, key=lambda s: -float(s.get("seconds", 0)))
-    return [(str(s["site"]), float(s.get("seconds", 0))) for s in ranked[:MAX_SITES]]
+    """Distinct call sites (longest sleep first). Deduplicate *before* cutting to
+    MAX_SITES: every run reports the same sites again."""
+    longest: dict[str, float] = {}
+    for s in sleep_sites:
+        site, seconds = str(s["site"]), float(s.get("seconds", 0))
+        longest[site] = max(longest.get(site, 0.0), seconds)
+    ranked = sorted(longest.items(), key=lambda item: (-item[1], item[0]))
+    return ranked[:MAX_SITES]
 
 
 def check_short_waits(
@@ -103,7 +114,7 @@ def check_short_waits(
     outs = [failed(r, victim) for r in results]
     normal_fail, normal_total = _fails(outs[:NORMAL_TRIALS])
     short_fail, short_total = _fails(outs[NORMAL_TRIALS:])
-    proven = short_total and short_fail == short_total and normal_fail < normal_total
+    proven = bool(short_total) and _majority(short_fail, short_total) and normal_fail < normal_total
     if latent and normal_fail:
         proven = False  # a latent issue must pass normally
     if not proven:
@@ -125,10 +136,7 @@ def check_short_waits(
     sites_info: list[dict[str, Any]] = list(known_sites)
     for r in results[NORMAL_TRIALS:]:
         sites_info += r.sleep_sites.get(victim, [])
-    seen: dict[str, float] = {}
-    for site, seconds in _sites_from(sites_info):
-        seen[site] = max(seen.get(site, 0.0), seconds)
-    sites = list(seen.items())[:MAX_SITES]
+    sites = _sites_from(sites_info)
 
     culprits: list[tuple[str, float]] = []
     evidence = [
@@ -155,7 +163,7 @@ def check_short_waits(
                 [failed(r, victim) for r in per_site[i * SHORT_TRIALS : (i + 1) * SHORT_TRIALS]]
             )
             evidence.append(f"shortening only `sleep({seconds:g})` at {site}: failed {f}/{t}")
-            if t and f == t:
+            if t and _majority(f, t):
                 culprits.append((site, seconds))
     elif sites:
         culprits = sites  # the only sleep it makes
@@ -171,7 +179,7 @@ def check_short_waits(
     diag.evidence = evidence
     repro = Repro(alone, sleep_scale=SLEEP_SCALE, sleep_sites=[c[0] for c in culprits])
     diag.repro = runner.repro_command(repro)
-    diag.repro_verified = verify_repro(runner, repro)
+    diag.repro_verified = any(verify_repro(runner, repro) for _ in range(REPRO_ATTEMPTS))
     diag.confirmed = diag.repro_verified
     return diag
 

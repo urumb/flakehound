@@ -127,7 +127,7 @@ def test_sleep_used_as_wait_is_pinned_to_its_line(make_project):
     d = latent["test_waits_with_sleep"]
     assert d.cause is EnvCause.TIMING and d.latent and d.confirmed
     assert "tests/test_waits.py:19" in d.condition  # the 0.3 s wait, not the harmless one
-    assert any("tests/test_waits.py:16" in e and "failed 0/2" in e for e in d.evidence)
+    assert any("tests/test_waits.py:16" in e and "failed 0/3" in e for e in d.evidence)
     assert "--flakehound-sleep-sites=tests/test_waits.py:19" in d.repro
     assert d.repro_verified is True
     assert "test_no_sleep" not in latent
@@ -218,3 +218,13 @@ def test_invalid_sleep_scale_is_rejected(make_project):
     out = _pytest(root, "--flakehound-sleep-scale=5")
     assert out.returncode != 0
     assert "--flakehound-sleep-scale" in out.stdout + out.stderr
+
+
+def test_sleep_sites_are_deduplicated_before_truncation():
+    from flakehound.diagnosis.timing import MAX_SITES, _sites_from
+
+    # Many runs report the same long sleep; a short one must not be crowded out.
+    reports = [{"site": "a.py:1", "seconds": 0.3}] * 10 + [{"site": "a.py:2", "seconds": 0.02}]
+    assert _sites_from(reports) == [("a.py:1", 0.3), ("a.py:2", 0.02)]
+    many = [{"site": f"b.py:{i}", "seconds": i / 100} for i in range(20)]
+    assert len(_sites_from(many)) == MAX_SITES
