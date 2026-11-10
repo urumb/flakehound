@@ -6,7 +6,7 @@
 
 **Find flaky tests and prove *why* they're flaky.**
 
-> 🚧 Early development (milestone 4 of 6). Not on PyPI yet.
+> 🚧 Early development (milestone 5 of 6). Not on PyPI yet.
 
 Flaky tests pass sometimes and fail sometimes with no code change. Most tools just
 retry them, which hides the problem. flakehound runs your pytest suite under
@@ -108,14 +108,63 @@ Real output on the [demo project](demo/) (trimmed):
 | `--max-diagnose N` | Diagnose at most N flaky tests (default 20) |
 | `--no-probes` | Skip all probe runs (timezones, risky dates, timing) |
 | `--no-timing` | Skip only the timing probes (shorter sleeps, thread stress) |
+| `--markdown PATH` | Also write a Markdown report (for PR comments) |
+| `--no-step-summary` | Don't add the report to the GitHub Actions job summary |
+| `--fail-on KINDS` | What makes exit code 1: `flaky`, `time-bomb`, `racy`, `broken`, `suspected`, `none` (default `flaky,time-bomb,racy`) |
 | `-- ARGS` | Anything after `--` goes straight to pytest |
 
-Exit codes: `0` no problems, `1` flaky, time bomb or racy tests found, `2` usage or collection error.
+Exit codes: `0` no problems, `1` problems found (see `--fail-on`; by default only flaky tests and
+*confirmed* time bombs or racy tests fail a build), `2` usage or collection error.
 
 Repro commands that replay a seed, clock or timing stress use flakehound's pytest plugin
 (`--flakehound-seed`, `--flakehound-clock`, `--flakehound-sleep-scale`,
 `--flakehound-switch-interval`), so they need flakehound installed. It never
 loads into your normal pytest runs unless you pass `-p flakehound.adapters.pytest.plugin`.
+
+## In CI
+
+```yaml
+# .github/workflows/flakehound.yml
+on:
+  schedule: [{ cron: "0 3 * * *" }]   # nightly: hunting takes longer than a normal test run
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with: { python-version: "3.12" }
+      - run: pip install -e . "git+https://github.com/urumb/flakehound"
+      - run: flakehound run --json flakehound.json
+```
+
+In GitHub Actions the Markdown report is added to the run's summary page automatically.
+A ready-made GitHub Action is on the roadmap.
+
+## Quarantine
+
+Found a flaky test you can't fix today? Quarantine it so it stops failing the build,
+without hiding it:
+
+```bash
+flakehound quarantine add tests/test_cart.py::test_cart_starts_empty --reason "polluted by test_add_item"
+flakehound quarantine add --from-report flakehound.json    # every flaky / confirmed latent test
+flakehound quarantine list
+flakehound quarantine remove tests/test_cart.py::test_cart_starts_empty
+```
+
+- The list is one file, `.flakehound/quarantine.toml`: commit it, review it, revert it.
+  flakehound never edits your test files.
+- Every change shows a diff and asks first (`--yes` to skip the prompt; without a
+  terminal and without `--yes`, nothing is written).
+- pytest still runs quarantined tests as non-strict `xfail` (or `skip` with
+  `mode = "skip"`), so you see `XPASS` once one is fixed. Disable for one run with
+  `pytest -p no:flakehound-quarantine`. The plugin does nothing if the file doesn't exist.
+- `flakehound run` ignores the quarantine: quarantined tests keep being hunted.
 
 ## How it works
 
@@ -155,7 +204,7 @@ flakehound changes **one factor at a time**, like a science experiment:
 - [x] **M2** Order dependency: isolation, polluter/setter search, *which state leaked*, verified repros
 - [x] **M3** Environment: random seed vs hash seed, timezone and danger-date time bombs
 - [x] **M4** Timing: sleeps used as waits (exact line) and race conditions
-- [ ] **M5** Verified repro commands, Markdown/PR output, CI mode, quarantine
+- [x] **M5** Markdown/PR report, GitHub job summary, `--fail-on`, quarantine, pytest-xdist support
 - [ ] **M6** First PyPI release
 - Later: GitHub Actions history mode, Jest/Go/JUnit adapters, optional local-AI explanations
 
