@@ -14,6 +14,7 @@ requires-python = ">=3.10"
 dependencies = [
     "pytest>=7.0",
     "rich>=13.0",
+    "tomli>=1.1; python_version < '3.11'",  # TOML reader (built in from 3.11)
 ]
 keywords = ["pytest", "flaky", "flaky-tests", "testing", "ci", "test-order"]
 classifiers = [
@@ -34,6 +35,10 @@ Security = "https://github.com/urumb/flakehound/security/policy"
 
 [project.scripts]
 flakehound = "flakehound.cli:main"
+
+# Inert unless .flakehound/quarantine.toml exists. Disable: -p no:flakehound-quarantine
+[project.entry-points.pytest11]
+flakehound-quarantine = "flakehound.quarantine_plugin"
 
 [tool.hatch.version]
 path = "src/flakehound/__init__.py"

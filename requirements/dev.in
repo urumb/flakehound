@@ -6,3 +6,4 @@ ruff
 mypy
 hatchling
 editables
+pytest-xdist  # only to test projects that use -n in addopts

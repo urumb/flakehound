@@ -24,8 +24,9 @@ from flakehound.report.redact import redact, truncate
 
 PLUGIN = "flakehound.adapters.pytest.plugin"
 
-# Plugins that reorder tests themselves would fight our ordering.
-_BLOCKED_PLUGINS = ("randomly", "random_order", "cacheprovider")
+# Plugins that reorder tests would fight our ordering, and quarantine would hide
+# the very failures we are hunting.
+_BLOCKED_PLUGINS = ("randomly", "random_order", "cacheprovider", "flakehound-quarantine")
 
 
 class PytestRunner:
@@ -47,12 +48,34 @@ class PytestRunner:
         self.procs = procs
         self.timeout = timeout
         self.base_env = dict(os.environ if base_env is None else base_env)
+        self._xdist: bool | None = None
+
+    @property
+    def has_xdist(self) -> bool:
+        """Is pytest-xdist installed for the test interpreter? (checked once)
+
+        If so we pass ``-n 0``: a ``-n auto`` in the project's addopts would
+        otherwise spread tests over processes and break the exact orders we
+        run. (``-p no:xdist`` would make such addopts an error instead.)
+        """
+        if self._xdist is None:
+            probe = (
+                "import importlib.util, sys; "
+                "sys.exit(0 if importlib.util.find_spec('xdist') else 1)"
+            )
+            res = self.procs.run(
+                [self.python, "-c", probe], cwd=self.project_dir, env=self._env(), timeout=60
+            )
+            self._xdist = res.returncode == 0 and not res.timed_out
+        return self._xdist
 
     def _command(self, *extra: str) -> list[str]:
         cmd = [self.python, "-m", "pytest", "-p", PLUGIN]
         for plugin in _BLOCKED_PLUGINS:
             cmd += ["-p", f"no:{plugin}"]
         cmd += ["-q", "--no-header", "-o", "console_output_style=classic"]
+        if self.has_xdist:
+            cmd += ["-n", "0"]
         cmd += list(extra)
         cmd += self.pytest_args
         return cmd
@@ -124,6 +147,8 @@ class PytestRunner:
         Seed and clock replay need flakehound installed (they use its plugin).
         """
         cmd = ["pytest", "-p", "no:randomly", "-p", "no:cacheprovider"]
+        if self.has_xdist:
+            cmd += ["-n", "0"]  # keep the exact order even if addopts has -n auto
         flags = []
         if repro.seed is not None:
             flags.append(f"--flakehound-seed={repro.seed}")

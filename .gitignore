@@ -33,3 +33,6 @@ Thumbs.db
 
 # Demo output
 demo/report.json
+
+# flakehound output files
+demo/report.md

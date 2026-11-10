@@ -25,3 +25,10 @@ def make_project(tmp_path: Path) -> Callable[[dict[str, str]], Path]:
         return root
 
     return _make
+
+
+@pytest.fixture(autouse=True)
+def _no_github_step_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In GitHub Actions this is set for our own test run too: never write the
+    CLI's reports into the real job summary from tests."""
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
