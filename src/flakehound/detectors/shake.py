@@ -142,7 +142,7 @@ def summarize_failure(message: str) -> tuple[str, str]:
     lines = [ln.rstrip() for ln in message.strip().splitlines() if ln.strip()]
     if not lines:
         return ("(no message)", "(no message)")
-    location = lines[-1].strip()
+    location = lines[-1].strip().replace("\\", "/")  # Windows paths: same style as test ids
     detail = next((ln[1:].strip() for ln in lines if ln.startswith("E ")), "")
     if not detail:
         return (location, location)

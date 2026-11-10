@@ -1,0 +1,96 @@
+name: Release
+
+# Publishes to PyPI when a version tag (v0.1.0, ...) is pushed.
+# Uses PyPI Trusted Publishing (OIDC): there is no API token stored anywhere.
+# The publish job runs in the protected "pypi" environment, so a maintainer
+# has to approve it on GitHub before anything is uploaded.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install locked build tools (hash-checked)
+        run: python -m pip install --require-hashes -r requirements/dev.txt
+      - name: Tag must match the package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(python -c "import re,pathlib; print(re.search(r'__version__ = \"(.+?)\"', pathlib.Path('src/flakehound/__init__.py').read_text()).group(1))")
+          test "$TAG" = "v$version" || { echo "tag $TAG does not match version $version"; exit 1; }
+      - name: Build sdist and wheel (no network: locked build backend)
+        run: python -m build --no-isolation
+      - name: Smoke-test the wheel in a fresh environment
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/flakehound --version
+          cd demo
+          set +e
+          /tmp/smoke/bin/flakehound run -n 8 --seed 7 --json report.json
+          code=$?
+          set -e
+          test "$code" -eq 1 || { echo "expected exit code 1 on the demo, got $code"; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/p/flakehound
+    permissions:
+      id-token: write # Trusted Publishing: short-lived OIDC token, nothing stored
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        # Also uploads signed build attestations (on by default).
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the GitHub release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Create GitHub release with the changelog notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'EOF' > notes.md
+          import os, re, pathlib
+          version = os.environ["TAG"].lstrip("v")
+          text = pathlib.Path("CHANGELOG.md").read_text()
+          m = re.search(rf"^## \[{re.escape(version)}\].*?$(.*?)(?=^## \[|\Z)", text, re.S | re.M)
+          print(m.group(1).strip() if m else "See CHANGELOG.md")
+          EOF
+          gh release create "$TAG" dist/* --title "flakehound $TAG" --notes-file notes.md --verify-tag

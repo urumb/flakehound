@@ -18,13 +18,18 @@ dependencies = [
 ]
 keywords = ["pytest", "flaky", "flaky-tests", "testing", "ci", "test-order"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Framework :: Pytest",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Testing",
 ]
 
@@ -32,6 +37,7 @@ classifiers = [
 Homepage = "https://github.com/urumb/flakehound"
 Issues = "https://github.com/urumb/flakehound/issues"
 Security = "https://github.com/urumb/flakehound/security/policy"
+Changelog = "https://github.com/urumb/flakehound/blob/main/CHANGELOG.md"
 
 [project.scripts]
 flakehound = "flakehound.cli:main"
@@ -44,7 +50,7 @@ flakehound-quarantine = "flakehound.quarantine_plugin"
 path = "src/flakehound/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/flakehound", "tests", "README.md", "LICENSE", "SECURITY.md"]
+include = ["src/flakehound", "tests", "README.md", "LICENSE", "SECURITY.md", "CHANGELOG.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
