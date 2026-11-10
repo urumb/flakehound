@@ -6,7 +6,8 @@ installing flakehound must never change how your normal ``pytest`` runs behave.
 What it does, only when flakehound passes its options:
 * keeps exactly the tests in the run spec, in the spec's order;
 * seeds ``random`` per test from the spec seed (deterministic and independent of order);
-* writes one JSON result per test (redacted failure message included).
+* writes one JSON result per test (redacted failure message included);
+* snapshots global state around the tests listed in ``spec.snapshot``.
 """
 
 from __future__ import annotations
@@ -14,12 +15,14 @@ from __future__ import annotations
 import json
 import os
 import random
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from flakehound.core.models import Outcome, RunSpec, TestResult
+from flakehound.adapters.pytest import snapshot
+from flakehound.core.models import Outcome, RunSpec, StateChange, TestResult
 from flakehound.report.redact import redact, truncate
 
 _MESSAGE_LINES = 25
@@ -38,6 +41,7 @@ class _Worker:
         self.out = out
         self.collect_out = collect_out
         self.results: dict[str, TestResult] = {}
+        self.state_changes: dict[str, list[StateChange]] = {}
 
     # --- ordering ---------------------------------------------------------
     @pytest.hookimpl(trylast=True)
@@ -65,6 +69,21 @@ class _Worker:
             # String seeds are hashed with SHA-512 by `random`, so this is
             # stable across processes and PYTHONHASHSEED values.
             random.seed(f"{self.spec.seed}:{item.nodeid}")
+
+    # --- state snapshots ----------------------------------------------------
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_protocol(
+        self, item: pytest.Item, nextitem: pytest.Item | None
+    ) -> Generator[None, None, None]:
+        watch = self.spec is not None and item.nodeid in self.spec.snapshot
+        if not watch:
+            yield
+            return
+        root = Path(str(item.config.rootpath))
+        before = snapshot.take(root)
+        yield  # setup, call and teardown of this test
+        after = snapshot.take(root)
+        self.state_changes[item.nodeid] = snapshot.diff(before, after)
 
     # --- results ----------------------------------------------------------
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
@@ -98,7 +117,16 @@ class _Worker:
             return
         order = {nodeid: i for i, nodeid in enumerate(self.spec.order)}
         ordered = sorted(self.results.values(), key=lambda r: order.get(r.nodeid, len(order)))
-        _write_json(self.out, {"results": [r.to_json() for r in ordered]})
+        _write_json(
+            self.out,
+            {
+                "results": [r.to_json() for r in ordered],
+                "state_changes": {
+                    nodeid: [c.to_json() for c in changes]
+                    for nodeid, changes in self.state_changes.items()
+                },
+            },
+        )
 
 
 def _phase_outcome(report: pytest.TestReport) -> Outcome | None:

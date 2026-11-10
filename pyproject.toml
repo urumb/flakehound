@@ -58,7 +58,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S"]
-"demo/**" = ["S"]
+"demo/**" = ["S", "RUF012"]  # the demo is buggy on purpose
 
 [tool.mypy]
 python_version = "3.10"

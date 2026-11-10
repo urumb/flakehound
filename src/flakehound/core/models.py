@@ -23,6 +23,28 @@ class Outcome(str, Enum):
 
 
 @dataclass(frozen=True)
+class StateChange:
+    """One piece of global state a test changed and did not restore."""
+
+    kind: str  # "global", "class_attr", "env", "cwd", "file", "sys_path", "logging"
+    name: str  # e.g. "shop.cart", "APP_CURRENCY", "data/out.csv"
+    before: str  # short, redacted representation ("<missing>" when it didn't exist)
+    after: str
+
+    def to_json(self) -> dict[str, str]:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> StateChange:
+        return cls(
+            kind=str(data["kind"]),
+            name=str(data["name"]),
+            before=str(data["before"]),
+            after=str(data["after"]),
+        )
+
+
+@dataclass(frozen=True)
 class RunSpec:
     """One experiment: run these tests, in this order, under these conditions."""
 
@@ -32,6 +54,8 @@ class RunSpec:
     hash_seed: int | None = None
     env: dict[str, str] = field(default_factory=dict)
     label: str = ""
+    # Tests to snapshot global state around (before setup, after teardown).
+    snapshot: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,6 +69,7 @@ class RunSpec:
             hash_seed=None if data.get("hash_seed") is None else int(data["hash_seed"]),
             env={str(k): str(v) for k, v in data.get("env", {}).items()},
             label=str(data.get("label", "")),
+            snapshot=[str(x) for x in data.get("snapshot", [])],
         )
 
 
@@ -83,6 +108,8 @@ class RunResult:
     duration: float
     crashed: bool = False  # worker died / timed out before reporting
     error: str = ""  # redacted reason when crashed
+    # nodeid -> state it changed (only for tests listed in spec.snapshot)
+    state_changes: dict[str, list[StateChange]] = field(default_factory=dict)
 
     def outcome_of(self, nodeid: str) -> Outcome | None:
         for r in self.results:

@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from xml.etree import ElementTree
 
 from flakehound.adapters.base import CollectionError
-from flakehound.core.models import RunResult, RunSpec, TestResult
+from flakehound.core.models import RunResult, RunSpec, StateChange, TestResult
 from flakehound.core.procs import ProcessRegistry
 from flakehound.report.redact import redact, truncate
 
@@ -93,9 +95,14 @@ class PytestRunner:
         )
         duration = time.perf_counter() - start
         results: list[TestResult] = []
+        state_changes: dict[str, list[StateChange]] = {}
         if out_path.exists():
             data = json.loads(out_path.read_text(encoding="utf-8"))
             results = [TestResult.from_json(r) for r in data["results"]]
+            state_changes = {
+                str(nodeid): [StateChange.from_json(c) for c in changes]
+                for nodeid, changes in data.get("state_changes", {}).items()
+            }
         crashed = res.timed_out or not out_path.exists()
         error = ""
         if res.timed_out:
@@ -103,4 +110,55 @@ class PytestRunner:
         elif crashed:
             tail = "\n".join((res.stdout + "\n" + res.stderr).strip().splitlines()[-20:])
             error = truncate(redact(f"worker exited with code {res.returncode}:\n{tail}"))
-        return RunResult(spec, results, res.returncode, duration, crashed, error)
+        return RunResult(spec, results, res.returncode, duration, crashed, error, state_changes)
+
+    def repro_command(self, order: Sequence[str]) -> list[str]:
+        """A plain pytest command (no flakehound needed) that runs ``order`` in order.
+
+        pytest runs explicitly listed test ids in the order they are given.
+        """
+        return ["pytest", "-p", "no:randomly", "-p", "no:cacheprovider", *order]
+
+    def check_repro(self, order: Sequence[str], env: Mapping[str, str]) -> bool:
+        """Run :meth:`repro_command` for real; True if the last test failed.
+
+        This proves the command we print actually reproduces the failure,
+        without our plugin's help. The last test's outcome is read from a
+        JUnit XML report (part of pytest itself).
+        """
+        cmd = [self.python, "-m", *self.repro_command(order)]
+        with tempfile.TemporaryDirectory(prefix="flakehound-repro-") as tmp:
+            xml = Path(tmp) / "repro.xml"
+            run_env = dict(self.base_env)
+            run_env["PYTHONDONTWRITEBYTECODE"] = "1"
+            run_env.update(env)
+            res = self.procs.run(
+                [*cmd, "-q", f"--junitxml={xml}"],
+                cwd=self.project_dir,
+                env=run_env,
+                timeout=self.timeout,
+            )
+            if res.timed_out or not xml.exists():
+                return False
+            return _last_test_failed(xml, order[-1])
+
+
+def _last_test_failed(xml_path: Path, nodeid: str) -> bool:
+    """Did ``nodeid`` fail in a pytest JUnit XML report?"""
+    # The XML is written by pytest from the user's own project, parsed with the
+    # stdlib parser, which does not resolve external entities.
+    tree = ElementTree.parse(xml_path)  # noqa: S314
+    parts = nodeid.split("::")
+    name = parts[-1]
+    # JUnit classname is the dotted file path plus any test classes,
+    # e.g. "tests/test_a.py::TestX::test_y" -> "tests.test_a.TestX".
+    module = parts[0].removesuffix(".py").replace("/", ".").replace("\\", ".")
+    classname = ".".join([module, *parts[1:-1]])
+    for case in tree.iter("testcase"):
+        if (
+            case.get("name") == name
+            and case.get("classname") == classname
+            and (case.find("failure") is not None or case.find("error") is not None)
+        ):
+            return True
+    return False

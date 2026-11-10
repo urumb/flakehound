@@ -62,4 +62,4 @@ jobs:
           code=$?
           set -e
           test "$code" -eq 1 || { echo "expected exit code 1 (flaky found), got $code"; exit 1; }
-          python -c "import json; d = json.load(open('report.json')); assert d['summary']['flaky'] >= 3, d['summary']"
+          python ../tests/check_demo_report.py report.json

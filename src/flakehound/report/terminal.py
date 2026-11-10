@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import shlex
+
 from rich.console import Console
 from rich.markup import escape
 from rich.text import Text
 
 from flakehound import __version__
 from flakehound.detectors.shake import TestStats, Verdict
+from flakehound.diagnosis.order import OrderDiagnosis, OrderKind
 from flakehound.session import Report
 
 _STYLE = {
@@ -25,6 +28,7 @@ class _Sym:
         self.dash = "–" if fancy else "-"  # en dash
         self.times = "×" if fancy else "x"  # multiplication sign
         self.ellipsis = "…" if fancy else "..."
+        self.arrow = "→" if fancy else "->"
 
 
 def _sym(console: Console) -> _Sym:
@@ -45,7 +49,93 @@ def header(console: Console, runner: str, runs: int, workers: int, seed: int) ->
     )
 
 
-def _print_test(console: Console, s: TestStats) -> None:
+_MAX_STATE_LINES = 4
+_PAD = "             "  # aligns continuation lines under the field values
+
+
+def _field(console: Console, name: str, value: str) -> None:
+    console.print(f"   [bold]{name + ':':<9}[/] {value}", highlight=False)
+
+
+def _short(nodeid: str) -> str:
+    return nodeid.split("::")[-1]
+
+
+def _print_diagnosis(console: Console, d: OrderDiagnosis) -> None:
+    sym = _sym(console)
+    if not d.is_order:
+        if d.kind is OrderKind.NOT_ORDER:
+            _field(console, "Cause", f"[bold]not test order[/]: {escape(d.note)}")
+        else:
+            _field(console, "Cause", f"[dim]unknown: {escape(d.note)}[/]")
+        return
+    status = "confirmed" if d.confirmed else "suspected"
+    culprits = ", ".join(escape(c) for c in d.culprits)
+    if d.kind is OrderKind.POLLUTED:
+        _field(console, "Cause", f"[bold magenta]ORDER DEPENDENCY[/] ({status})")
+        role = "Polluter" if len(d.culprits) == 1 else "Polluters"
+        _field(console, role, culprits)
+    else:
+        _field(
+            console, "Cause", f"[bold magenta]ORDER DEPENDENCY: needs another test[/] ({status})"
+        )
+        _field(console, "Setter", culprits)
+    if d.state_changes:
+        label = "Leaked" if d.kind is OrderKind.POLLUTED else "Sets"
+        for i, c in enumerate(d.state_changes[:_MAX_STATE_LINES]):
+            prefix = "env " if c.kind == "env" else ""
+            line = f"{prefix}{escape(c.name)}: {escape(c.before)} {sym.arrow} {escape(c.after)}"
+            if c.kind == "file":
+                line = f"file {escape(c.name)} {escape(c.after)}"
+            if i == 0:
+                _field(console, label, line)
+            else:
+                console.print(f"{_PAD}{line}", highlight=False)
+        extra = len(d.state_changes) - _MAX_STATE_LINES
+        if extra > 0:
+            console.print(f"{_PAD}[dim]+{extra} more in the JSON report[/]", highlight=False)
+    first = _short(d.culprits[0]) if len(d.culprits) == 1 else "the culprits"
+    ev = d.evidence
+    verb = "failed" if d.kind is OrderKind.POLLUTED else "passed"
+    before = (
+        ev.before_failed if d.kind is OrderKind.POLLUTED else ev.before_total - ev.before_failed
+    )
+    other = (
+        ev.otherwise_failed
+        if d.kind is OrderKind.POLLUTED
+        else ev.otherwise_total - ev.otherwise_failed
+    )
+    _field(
+        console,
+        "Evidence",
+        f"{verb} in {before}/{ev.before_total} runs where {escape(first)} ran first, "
+        f"{other}/{ev.otherwise_total} otherwise",
+    )
+    if d.kind is OrderKind.POLLUTED:
+        console.print(
+            f"{_PAD}passes alone {d.alone_total - d.alone_failed}/{d.alone_total} with the "
+            f"same seeds; fails {d.confirm_reproduced}/{d.confirm_total} right after "
+            f"{escape(first)}",
+            highlight=False,
+        )
+    else:
+        console.print(
+            f"{_PAD}fails alone {d.alone_pass_seeds_failed}/{d.alone_pass_seeds_total}; "
+            f"passes {d.confirm_reproduced}/{d.confirm_total} right after {escape(first)}",
+            highlight=False,
+        )
+    if d.fix:
+        _field(console, "Fix", escape(d.fix))
+    if d.repro:
+        tag = ""
+        if d.repro_verified is True:
+            tag = "[green](verified)[/]"
+        elif d.repro_verified is False:
+            tag = "[yellow](did not reproduce outside flakehound)[/]"
+        _field(console, "Repro", f"{escape(shlex.join(d.repro))} {tag}")
+
+
+def _print_test(console: Console, s: TestStats, diag: OrderDiagnosis | None = None) -> None:
     sym = _sym(console)
     label = Text(f" {s.verdict.value.upper()} ", style=_STYLE[s.verdict])
     console.print(label, Text(s.nodeid, style="bold"))
@@ -56,6 +146,8 @@ def _print_test(console: Console, s: TestStats) -> None:
             f"({_pct(s.failure_rate)}, 95% CI {_pct(lo)}{sym.dash}{_pct(hi)})",
             highlight=False,
         )
+        if diag is not None:
+            _print_diagnosis(console, diag)
     else:
         console.print(
             f"   failed in every run ({s.failures}/{s.runs}): a real failure, not flakiness",
@@ -75,7 +167,13 @@ def print_report(console: Console, report: Report) -> None:
     flaky = report.by_verdict(Verdict.FLAKY)
     broken = report.by_verdict(Verdict.BROKEN)
     for s in flaky + broken:
-        _print_test(console, s)
+        _print_test(console, s, report.diagnoses.get(s.nodeid))
+    if report.not_diagnosed:
+        console.print(
+            f"[dim]{report.not_diagnosed} more flaky tests were not diagnosed "
+            "(raise --max-diagnose to include them)[/]\n",
+            highlight=False,
+        )
 
     for r in report.crashed_runs:
         console.print(
@@ -96,8 +194,9 @@ def print_report(console: Console, report: Report) -> None:
         parts.append(f"{skipped} skipped")
     console.print(
         f" {sym.dot} ".join(parts)
-        + f"  [dim]({len(report.test_ids)} tests {sym.times} {report.runs} runs in "
-        f"{report.duration:.1f}s)[/]",
+        + f"  [dim]({len(report.test_ids)} tests {sym.times} {report.runs} runs"
+        + (f" + {report.diagnosis_runs} diagnosis runs" if report.diagnosis_runs else "")
+        + f" in {report.duration:.1f}s)[/]",
         highlight=False,
     )
     console.print(

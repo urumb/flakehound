@@ -18,6 +18,7 @@ from flakehound.adapters.pytest.runner import PytestRunner
 from flakehound.core.models import RunResult
 from flakehound.core.procs import ProcessRegistry
 from flakehound.detectors.shake import Verdict
+from flakehound.diagnosis.order import OrderDiagnosis
 from flakehound.report import terminal
 from flakehound.report.json_report import write_json
 
@@ -68,6 +69,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--python", default=None, help="python interpreter for tests (default: this one)"
     )
+    run.add_argument(
+        "--no-diagnose", action="store_true", help="only detect flaky tests, don't explain them"
+    )
+    run.add_argument(
+        "--max-diagnose",
+        type=_positive_int,
+        default=20,
+        help="diagnose at most this many flaky tests (default 20)",
+    )
     return parser
 
 
@@ -109,6 +119,12 @@ def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> in
     def finished(_: RunResult) -> None:
         progress.advance(task)
 
+    def diagnose_start(n: int) -> None:
+        progress.update(task, description=f"diagnosing {n} flaky tests", total=n, completed=0)
+
+    def diagnosed(_: OrderDiagnosis) -> None:
+        progress.advance(task)
+
     try:
         with progress:
             report = run_session(
@@ -117,8 +133,12 @@ def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> in
                 runs=args.runs,
                 workers=args.workers,
                 master_seed=seed,
+                diagnose=not args.no_diagnose,
+                max_diagnose=args.max_diagnose,
                 on_collected=collected,
                 on_result=finished,
+                on_diagnose_start=diagnose_start,
+                on_diagnosed=diagnosed,
             )
     except CollectionError as exc:
         console.print(f"[bold red]error:[/] {exc}", highlight=False, markup=False)

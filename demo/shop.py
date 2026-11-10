@@ -37,3 +37,20 @@ class Uploader:
     def _work(self) -> None:
         time.sleep(0.05)  # pretend network work
         self.done = True
+
+
+def currency() -> str:
+    """Reads config from the environment (trap: env var leaked by another test)."""
+    import os
+
+    return os.environ.get("SHOP_CURRENCY", "USD")
+
+
+class Inventory:
+    """Class-level state shared by every instance (trap: needs another test to run first)."""
+
+    stock: dict[str, int] = {}
+
+    @classmethod
+    def restock(cls, item: str, qty: int) -> None:
+        cls.stock[item] = cls.stock.get(item, 0) + qty
