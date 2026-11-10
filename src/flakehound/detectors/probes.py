@@ -40,8 +40,11 @@ def _at(day: date, hh: int, mm: int, ss: int) -> str:
     return datetime(day.year, day.month, day.day, hh, mm, ss).isoformat()
 
 
+# Shared with diagnosis/timing.py so probe and confirmation test the same thing.
+SLEEP_SCALE = 0.05
+
 TIMING_PROBES = [
-    Probe("short_waits", "when its sleeps are shorter", "timing", sleep_scale=0.1),
+    Probe("short_waits", "when its sleeps are shorter", "timing", sleep_scale=SLEEP_SCALE),
     Probe("thread_stress", "when threads switch more often", "timing", switch_interval=1e-6),
 ]
 

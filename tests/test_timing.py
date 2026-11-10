@@ -184,10 +184,10 @@ def _pytest(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def test_sleep_options_shrink_only_the_named_site(make_project):
     root = make_project({"tests/test_waits.py": WAITS})
     target = "tests/test_waits.py::test_waits_with_sleep"
-    assert _pytest(root, "--flakehound-sleep-scale=0.1", target).returncode == 1
+    assert _pytest(root, "--flakehound-sleep-scale=0.05", target).returncode == 1
     harmless = _pytest(
         root,
-        "--flakehound-sleep-scale=0.1",
+        "--flakehound-sleep-scale=0.05",
         "--flakehound-sleep-sites=tests/test_waits.py:16",
         target,
     )
@@ -203,10 +203,10 @@ def test_sleep_sites_work_through_a_symlinked_project(make_project, tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("symlinks not available here")
     target = "tests/test_waits.py::test_waits_with_sleep"
-    assert _pytest(link, "--flakehound-sleep-scale=0.1", target).returncode == 1
+    assert _pytest(link, "--flakehound-sleep-scale=0.05", target).returncode == 1
     only_harmless = _pytest(
         link,
-        "--flakehound-sleep-scale=0.1",
+        "--flakehound-sleep-scale=0.05",
         "--flakehound-sleep-sites=tests/test_waits.py:16",
         target,
     )

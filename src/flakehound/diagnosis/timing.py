@@ -1,6 +1,6 @@
 """Timing diagnosis: sleeps used as waits, and race conditions.
 
-* **Short waits.** Run the test alone with its main-thread ``sleep`` calls 10x
+* **Short waits.** Run the test alone with its main-thread ``sleep`` calls 20x
   shorter. If it now fails (and passes normally), it uses ``sleep`` to wait for
   something that isn't guaranteed to be done, which is exactly what fails on a
   slow or busy CI machine. Then shorten one call site at a time to find *which*
@@ -21,10 +21,11 @@ from typing import Any
 from flakehound.adapters.base import Runner
 from flakehound.core.executor import Executor
 from flakehound.core.models import Repro, RunSpec
+from flakehound.detectors.probes import SLEEP_SCALE as PROBE_SLEEP_SCALE
 from flakehound.diagnosis.common import failed, request, verify_repro
 from flakehound.diagnosis.env import EnvCause, EnvDiagnosis
 
-SLEEP_SCALE = 0.1
+SLEEP_SCALE = PROBE_SLEEP_SCALE  # 20x shorter: a clear signal even on overloaded machines
 SWITCH_INTERVAL = 1e-6
 MAX_SITES = 5
 SHORT_TRIALS = 3  # majority vote: sleeps overshoot on busy machines (e.g. macOS CI)
