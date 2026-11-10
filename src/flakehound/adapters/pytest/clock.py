@@ -17,11 +17,12 @@ datetime`` in test and project code picks up the shifted class.
 from __future__ import annotations
 
 import datetime as _dt
-import os
 import sys
 import time as _time
 from collections.abc import Callable
 from typing import Any
+
+from flakehound.adapters.pytest.paths import canon, is_project_file
 
 _real_datetime = _dt.datetime
 _real_date = _dt.date
@@ -122,13 +123,11 @@ def install(target: str, project_root: str | None = None) -> None:
 def _rebind_project_modules(project_root: str) -> None:
     """Replace ``from datetime import datetime`` bindings in already-imported
     project modules (e.g. conftest.py). Library modules are left alone."""
-    root = os.path.normcase(os.path.abspath(project_root))
+    root = canon(project_root)
     swap = {id(_real_datetime): ShiftedDatetime, id(_real_date): ShiftedDate}
     for module in list(sys.modules.values()):
         file = getattr(module, "__file__", None)
-        if not file or not os.path.normcase(os.path.abspath(file)).startswith(root):
-            continue
-        if "site-packages" in file:
+        if not file or not is_project_file(file, root):
             continue
         for name, value in list(vars(module).items()):
             replacement = swap.get(id(value))

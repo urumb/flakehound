@@ -24,12 +24,12 @@ import os
 import re
 import reprlib
 import sys
-import sysconfig
 import types
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from flakehound.adapters.pytest.paths import canon, is_project_file
 from flakehound.core.models import StateChange
 from flakehound.report.redact import REDACTED, redact
 
@@ -91,25 +91,11 @@ class Snapshot:
     files: dict[str, tuple[int, int]] = field(default_factory=dict)  # path -> (size, mtime)
 
 
-def _library_paths() -> list[str]:
-    paths = {sys.prefix, sys.base_prefix, sys.exec_prefix}
-    known = sysconfig.get_paths()
-    for key in ("purelib", "platlib", "stdlib", "platstdlib"):
-        if key in known:
-            paths.add(known[key])
-    return [os.path.normcase(os.path.abspath(p)) for p in paths if p]
-
-
-def _is_project_module(name: str, module: types.ModuleType, root: str, libs: list[str]) -> bool:
+def _is_project_module(name: str, module: types.ModuleType, root: str) -> bool:
     if name.startswith(_SKIP_MODULE_PREFIXES) or name == "__main__":
         return False
     file = getattr(module, "__file__", None)
-    if not file:
-        return False
-    path = os.path.normcase(os.path.abspath(file))
-    if not path.startswith(root):
-        return False
-    return not any(path.startswith(lib) for lib in libs)
+    return bool(file) and is_project_file(str(file), root)
 
 
 def _plain_attrs(obj: object) -> Iterator[tuple[str, object]]:
@@ -126,10 +112,9 @@ def _plain_attrs(obj: object) -> Iterator[tuple[str, object]]:
 
 
 def _module_state(root: Path) -> Iterator[tuple[str, str, str]]:
-    root_s = os.path.normcase(str(root.resolve()))
-    libs = _library_paths()
+    root_s = canon(str(root))
     for mod_name, module in list(sys.modules.items()):
-        if module is None or not _is_project_module(mod_name, module, root_s, libs):
+        if module is None or not _is_project_module(mod_name, module, root_s):
             continue
         for attr, value in list(vars(module).items()):
             if attr.startswith("__") or isinstance(value, types.ModuleType):

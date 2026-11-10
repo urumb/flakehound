@@ -18,18 +18,15 @@ from __future__ import annotations
 
 import os
 import sys
-import sysconfig
 import threading
 import time as _time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import FrameType
 
+from flakehound.adapters.pytest.paths import canon, is_project_file, real
+
 _real_sleep: Callable[[float], None] = _time.sleep
-# flakehound's own package dir: never attribute sleeps to our code.
-_OWN_PACKAGE = (
-    os.path.normcase(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))) + os.sep
-)
 
 
 @dataclass
@@ -53,25 +50,15 @@ class _State:
 
 
 _state = _State()
-_libs: list[str] = []
-
-
-def _library_paths() -> list[str]:
-    paths = {sys.prefix, sys.base_prefix, sys.exec_prefix}
-    known = sysconfig.get_paths()
-    for key in ("purelib", "platlib", "stdlib", "platstdlib"):
-        if key in known:
-            paths.add(known[key])
-    return [os.path.normcase(os.path.abspath(p)) for p in paths if p]
+_root_real = ""  # resolved root, original case (for display)
 
 
 def _project_site(frame: FrameType | None) -> str | None:
     """``relative/path.py:line`` of the first frame in the project's own code."""
     while frame is not None:
-        path = os.path.normcase(os.path.abspath(frame.f_code.co_filename))
-        in_project = path.startswith(_state.root) and not any(path.startswith(x) for x in _libs)
-        if in_project and not path.startswith(_OWN_PACKAGE):
-            rel = os.path.relpath(frame.f_code.co_filename, _state.root)
+        file = frame.f_code.co_filename
+        if is_project_file(file, _state.root):
+            rel = os.path.relpath(real(file), _root_real)
             return f"{rel.replace(os.sep, '/')}:{frame.f_lineno}"
         frame = frame.f_back
     return None
@@ -101,10 +88,11 @@ def install(
     switch_interval: float | None = None,
 ) -> None:
     """Patch ``time.sleep`` (recording always; shrinking if ``scale``)."""
-    _state.root = os.path.normcase(os.path.abspath(root))
+    global _root_real
+    _state.root = canon(root)
+    _root_real = real(root)
     _state.scale = scale
     _state.only_sites = set(only_sites) if only_sites else None
-    _libs[:] = _library_paths()
     if _time.sleep is not _sleep:
         _time.sleep = _sleep  # type: ignore[assignment]
         _rebind_project_modules()
@@ -116,10 +104,7 @@ def _rebind_project_modules() -> None:
     """``from time import sleep`` in already-imported project modules (e.g. conftest)."""
     for module in list(sys.modules.values()):
         file = getattr(module, "__file__", None)
-        if not file:
-            continue
-        path = os.path.normcase(os.path.abspath(file))
-        if not path.startswith(_state.root) or any(path.startswith(lib) for lib in _libs):
+        if not file or not is_project_file(file, _state.root):
             continue
         for name, value in list(vars(module).items()):
             if value is _real_sleep:

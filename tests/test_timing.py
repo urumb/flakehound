@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from flakehound.adapters.pytest.runner import PytestRunner
 from flakehound.cli import main
 from flakehound.core.procs import ProcessRegistry
@@ -91,9 +93,19 @@ def _latent(report):
     return {d.nodeid.split("::")[-1]: d for d in report.latent}
 
 
+def _explain(report) -> str:
+    """Everything we know, printed when an assertion fails (helps on remote CI)."""
+    lines = [f"{s.nodeid}: {s.verdict.value} {s.failures}/{s.runs}" for s in report.stats]
+    lines += [f"env {k}: {v.to_json()}" for k, v in report.env_diagnoses.items()]
+    lines += [f"latent {d.nodeid}: {d.to_json()}" for d in report.latent]
+    return "\n".join(lines)
+
+
 def test_sleep_used_as_wait_is_pinned_to_its_line(make_project):
     root = make_project({"tests/test_waits.py": WAITS})
-    latent = _latent(_session(root))
+    report = _session(root)
+    latent = _latent(report)
+    assert "test_waits_with_sleep" in latent, _explain(report)
     d = latent["test_waits_with_sleep"]
     assert d.cause is EnvCause.TIMING and d.latent and d.confirmed
     assert "tests/test_waits.py:19" in d.condition  # the 0.3 s wait, not the harmless one
@@ -105,7 +117,9 @@ def test_sleep_used_as_wait_is_pinned_to_its_line(make_project):
 
 def test_race_condition_found_under_thread_stress(make_project):
     root = make_project({"tests/test_race.py": RACE})
-    latent = _latent(_session(root))
+    report = _session(root)
+    latent = _latent(report)
+    assert "test_race" in latent, _explain(report)
     d = latent["test_race"]
     assert d.cause is EnvCause.RACE and d.confirmed
     assert any(a.startswith("--flakehound-switch-interval=") for a in d.repro)
@@ -161,6 +175,25 @@ def test_sleep_options_shrink_only_the_named_site(make_project):
         target,
     )
     assert harmless.returncode == 0
+
+
+def test_sleep_sites_work_through_a_symlinked_project(make_project, tmp_path):
+    # macOS temp dirs are symlinks (/var -> /private/var): paths must be resolved.
+    root = make_project({"tests/test_waits.py": WAITS})
+    link = tmp_path / "linked"
+    try:
+        link.symlink_to(root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not available here")
+    target = "tests/test_waits.py::test_waits_with_sleep"
+    assert _pytest(link, "--flakehound-sleep-scale=0.1", target).returncode == 1
+    only_harmless = _pytest(
+        link,
+        "--flakehound-sleep-scale=0.1",
+        "--flakehound-sleep-sites=tests/test_waits.py:16",
+        target,
+    )
+    assert only_harmless.returncode == 0
 
 
 def test_invalid_sleep_scale_is_rejected(make_project):
