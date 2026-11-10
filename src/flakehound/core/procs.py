@@ -21,8 +21,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-_IS_WINDOWS = sys.platform == "win32"
-
 
 @dataclass(frozen=True)
 class ProcOutput:
@@ -58,7 +56,7 @@ class ProcessRegistry:
         if isinstance(args, str):  # defence in depth: never build shell strings
             raise TypeError("args must be a sequence of strings, not a string")
         kwargs: dict[str, object] = {}
-        if _IS_WINDOWS:
+        if sys.platform == "win32":  # literal check so mypy understands it on every OS
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             kwargs["start_new_session"] = True
