@@ -31,7 +31,7 @@ jobs:
         run: |
           version=$(python -c "import re,pathlib; print(re.search(r'__version__ = \"(.+?)\"', pathlib.Path('src/flakehound/__init__.py').read_text()).group(1))")
           test "$TAG" = "v$version" || { echo "tag $TAG does not match version $version"; exit 1; }
-      - name: Build sdist and wheel (no network: locked build backend)
+      - name: "Build sdist and wheel (offline, locked build backend)"
         run: python -m build --no-isolation
       - name: Smoke-test the wheel in a fresh environment
         run: |
