@@ -60,9 +60,14 @@ class Wallet:
 
 def test_race():
     w = Wallet()
-    threads = [
-        threading.Thread(target=lambda: [w.top_up(1) for _ in range(2000)]) for _ in range(4)
-    ]
+    start = threading.Barrier(4)
+
+    def worker():
+        start.wait()
+        for _ in range(2000):
+            w.top_up(1)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
     for t in threads:
         t.start()
     for t in threads:
@@ -108,6 +113,9 @@ def _explain(report) -> str:
     lines = [f"{s.nodeid}: {s.verdict.value} {s.failures}/{s.runs}" for s in report.stats]
     lines += [f"env {k}: {v.to_json()}" for k, v in report.env_diagnoses.items()]
     lines += [f"latent {d.nodeid}: {d.to_json()}" for d in report.latent]
+    for p, r in zip(report.probes, report.probe_results, strict=False):
+        failed = [t.nodeid for t in r.results if t.outcome.is_failure]
+        lines.append(f"probe {p.name}: crashed={r.crashed} failed={failed} error={r.error!r}")
     return "\n".join(lines)
 
 

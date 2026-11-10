@@ -34,6 +34,7 @@ class Report:
     duration: float
     stats: list[TestStats]
     run_results: list[RunResult]
+    probe_results: list[RunResult] = field(default_factory=list)  # same order as probes
     diagnoses: dict[str, OrderDiagnosis] = field(default_factory=dict)
     env_diagnoses: dict[str, EnvDiagnosis] = field(default_factory=dict)
     latent: list[EnvDiagnosis] = field(default_factory=list)  # time bombs and racy tests
@@ -46,7 +47,18 @@ class Report:
 
     @property
     def crashed_runs(self) -> list[RunResult]:
-        return [r for r in self.run_results if r.crashed]
+        return [r for r in self.run_results + self.probe_results if r.crashed]
+
+    def _probe_outcome(self, i: int) -> dict[str, Any]:
+        if i >= len(self.probe_results):
+            return {"ran": False}
+        r = self.probe_results[i]
+        return {
+            "ran": True,
+            "crashed": r.crashed,
+            "error": r.error,
+            "failed_tests": [t.nodeid for t in r.results if t.outcome.is_failure],
+        }
 
     def to_json(self) -> dict[str, Any]:
         failing = {rid for s in self.stats for rid in s.failing_runs}
@@ -62,8 +74,16 @@ class Report:
             "summary": {v.value: len(self.by_verdict(v)) for v in Verdict},
             "diagnosis_runs": self.diagnosis_runs,
             "probes": [
-                {"name": p.name, "label": p.label, "env": p.env, "clock": p.clock}
-                for p in self.probes
+                {
+                    "name": p.name,
+                    "label": p.label,
+                    "env": p.env,
+                    "clock": p.clock,
+                    "sleep_scale": p.sleep_scale,
+                    "switch_interval": p.switch_interval,
+                    **(self._probe_outcome(i)),
+                }
+                for i, p in enumerate(self.probes)
             ],
             "latent": [{"nodeid": d.nodeid, **d.to_json()} for d in self.latent],
             "tests_detail": [
@@ -253,6 +273,7 @@ def run_session(
         duration=time.perf_counter() - start,
         stats=stats,
         run_results=results,
+        probe_results=probe_results,
         diagnoses=diagnoses,
         env_diagnoses=env_diagnoses,
         latent=latent,

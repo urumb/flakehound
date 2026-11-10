@@ -5,8 +5,10 @@ import shop
 
 def test_concurrent_top_ups():
     wallet = shop.Wallet()
+    start = threading.Barrier(4)  # all four "users" pay at the same moment
 
     def worker():
+        start.wait()
         for _ in range(2000):
             wallet.top_up(1)
 
