@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flakehound"
+dynamic = ["version"]
+description = "Find flaky tests and prove why they're flaky. Free, local, private."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Noel Jacob Antony" }]
+requires-python = ">=3.10"
+dependencies = [
+    "pytest>=7.0",
+    "rich>=13.0",
+]
+keywords = ["pytest", "flaky", "flaky-tests", "testing", "ci", "test-order"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Homepage = "https://github.com/urumb/flakehound"
+Issues = "https://github.com/urumb/flakehound/issues"
+Security = "https://github.com/urumb/flakehound/security/policy"
+
+[project.scripts]
+flakehound = "flakehound.cli:main"
+
+[tool.hatch.version]
+path = "src/flakehound/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/flakehound", "tests", "README.md", "LICENSE", "SECURITY.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = [
+    "S101",  # assert is fine in tests and internal invariants
+    "RUF001",  # we intentionally print symbols like · and ×
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S"]
+"demo/**" = ["S"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src"]

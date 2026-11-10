@@ -1,0 +1,152 @@
+"""Command line interface: ``flakehound run``."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import secrets
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+
+from flakehound import __version__
+from flakehound.adapters.base import CollectionError
+from flakehound.adapters.pytest.runner import PytestRunner
+from flakehound.core.models import RunResult
+from flakehound.core.procs import ProcessRegistry
+from flakehound.detectors.shake import Verdict
+from flakehound.report import terminal
+from flakehound.report.json_report import write_json
+
+EXIT_OK = 0
+EXIT_FLAKY = 1
+EXIT_USAGE = 2
+EXIT_INTERRUPTED = 130
+
+
+def _positive_int(value: str) -> int:
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return n
+
+
+def _default_workers() -> int:
+    return max(1, min(8, (os.cpu_count() or 2) - 1))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="flakehound",
+        description="Find flaky tests and prove why they're flaky.",
+    )
+    parser.add_argument("--version", action="version", version=f"flakehound {__version__}")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    run = sub.add_parser(
+        "run",
+        help="run the test suite many times under varied conditions",
+        description=(
+            "Runs your pytest suite several times with shuffled order and varied seeds, "
+            "then reports which tests are flaky. WARNING: this executes your test code; "
+            "only run it on code you trust. Extra pytest arguments go after '--'."
+        ),
+    )
+    run.add_argument("paths", nargs="*", help="test paths passed to pytest (default: pytest's)")
+    run.add_argument("-n", "--runs", type=_positive_int, default=10, help="number of runs")
+    run.add_argument(
+        "-j", "--workers", type=_positive_int, default=_default_workers(), help="parallel runs"
+    )
+    run.add_argument("--seed", type=int, default=None, help="master seed (to replay a session)")
+    run.add_argument(
+        "--timeout", type=float, default=600.0, help="seconds before a single run is killed"
+    )
+    run.add_argument("--json", type=Path, default=None, metavar="PATH", help="write JSON report")
+    run.add_argument(
+        "--python", default=None, help="python interpreter for tests (default: this one)"
+    )
+    return parser
+
+
+def _split_passthrough(argv: Sequence[str]) -> tuple[list[str], list[str]]:
+    argv = list(argv)
+    if "--" in argv:
+        i = argv.index("--")
+        return argv[:i], argv[i + 1 :]
+    return argv, []
+
+
+def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> int:
+    procs = ProcessRegistry()
+    seed = args.seed if args.seed is not None else secrets.randbelow(2**31)
+    runner = PytestRunner(
+        Path.cwd(),
+        [*args.paths, *extra],
+        python=args.python,
+        procs=procs,
+        timeout=args.timeout,
+    )
+    terminal.header(console, runner.name, args.runs, args.workers, seed)
+
+    from flakehound.session import run_session
+
+    progress = Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    )
+    task = progress.add_task("collecting tests", total=None)
+
+    def collected(n: int) -> None:
+        progress.update(task, description=f"running {n} tests", total=args.runs)
+
+    def finished(_: RunResult) -> None:
+        progress.advance(task)
+
+    try:
+        with progress:
+            report = run_session(
+                runner,
+                procs,
+                runs=args.runs,
+                workers=args.workers,
+                master_seed=seed,
+                on_collected=collected,
+                on_result=finished,
+            )
+    except CollectionError as exc:
+        console.print(f"[bold red]error:[/] {exc}", highlight=False, markup=False)
+        return EXIT_USAGE
+    except KeyboardInterrupt:
+        procs.kill_all()
+        console.print("\n[yellow]interrupted, all test processes stopped[/]")
+        return EXIT_INTERRUPTED
+
+    if not report.test_ids:
+        console.print("[yellow]no tests collected[/]")
+        return EXIT_USAGE
+    terminal.print_report(console, report)
+    if args.json is not None:
+        write_json(report, args.json)
+        console.print(f"[dim]JSON report written to {args.json}[/]", highlight=False)
+    return EXIT_FLAKY if report.by_verdict(Verdict.FLAKY) else EXIT_OK
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    own, extra = _split_passthrough(sys.argv[1:] if argv is None else argv)
+    args = build_parser().parse_args(own)
+    # Never crash on terminals that can't print some characters (old Windows consoles).
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="replace")
+    console = Console()
+    if args.command == "run":
+        return _cmd_run(args, extra, console)
+    return EXIT_USAGE  # pragma: no cover - argparse enforces the subcommand

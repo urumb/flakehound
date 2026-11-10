@@ -1,0 +1,5 @@
+# A tiny shop full of intentionally flaky tests: proof that flakehound works,
+# and the README demo. Run from this folder:  flakehound run
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
