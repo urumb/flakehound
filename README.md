@@ -6,17 +6,17 @@
 
 **Find flaky tests and prove *why* they're flaky.**
 
-> 🚧 Early development (milestone 1 of 6). Not on PyPI yet.
+> 🚧 Early development (milestone 2 of 6). Not on PyPI yet.
 
 Flaky tests pass sometimes and fail sometimes with no code change. Most tools just
 retry them, which hides the problem. flakehound runs your pytest suite under
 deliberately hostile conditions, finds the tests that flip between pass and fail,
-and (as the diagnosis milestones land) explains the cause with evidence from real runs.
+and explains the cause with evidence from real runs.
 
 - 🆓 **Free forever.** No accounts, no servers, no paid services.
 - 🔒 **Local and private.** Offline, no telemetry, secrets redacted from every report.
 - 🧪 **Evidence, not guesses.** Every verdict comes with the runs that prove it,
-  and every session can be replayed exactly with its seed.
+  and every repro command is verified by actually running it.
 
 ## Quickstart
 
@@ -26,28 +26,38 @@ cd your-project
 flakehound run
 ```
 
-Real output on the [demo project](demo/):
+Real output on the [demo project](demo/) (trimmed):
 
 ```
-flakehound 0.1.0.dev0 · pytest · 12 runs · 8 workers · seed 7
+ FLAKY  tests/test_cart.py::test_cart_starts_empty
+   failed 7/16 runs (44%, 95% CI 23%–67%)
+   Cause:    ORDER DEPENDENCY (confirmed)
+   Polluter: tests/test_cart.py::test_add_item
+   Leaked:   shop.cart: [] → ['apple']
+   Evidence: failed in 7/7 runs where test_add_item ran first, 0/9 otherwise
+             passes alone 3/3 with the same seeds; fails 3/3 right after test_add_item
+   Fix:      in test_add_item: reset `shop.cart` around each test, e.g. an autouse
+             fixture that clears it after the test (`yield` then `shop.cart.clear()`)
+   Repro:    pytest -p no:randomly -p no:cacheprovider tests/test_cart.py::test_add_item
+             tests/test_cart.py::test_cart_starts_empty (verified)
+
+ FLAKY  tests/test_currency.py::test_prices_default_to_usd
+   Cause:    ORDER DEPENDENCY (confirmed)
+   Polluter: tests/test_currency.py::test_euro_store
+   Leaked:   env SHOP_CURRENCY: <missing> → 'EUR'
+   Fix:      in test_euro_store: use `monkeypatch.setenv`/`monkeypatch.delenv`
+             so `SHOP_CURRENCY` is restored
+
+ FLAKY  tests/test_inventory.py::test_apples_in_stock
+   Cause:    ORDER DEPENDENCY: needs another test (confirmed)
+   Setter:   tests/test_inventory.py::test_restock_apples
+   Sets:     shop.Inventory.stock: {} → {'apple': 5}
 
  FLAKY  tests/test_tags.py::test_tags_render_alphabetically
-   failed 8/12 runs (67%, 95% CI 39%–86%)
-   error (8×): AssertionError: assert 'python,flaky,pytest' == 'flaky,pytest,python'  (tests/test_tags.py)
-   failing runs: #0, #2, #3, #7, #8, #9, #10, #11
+   Cause:    not test order: fails on its own (3/3 runs with the seeds of the
+             failing runs), so test order is not the cause
 
- FLAKY  tests/test_cart.py::test_cart_starts_empty
-   failed 7/12 runs (58%, 95% CI 32%–81%)
-   error (7×): AssertionError: assert ['apple'] == []  (tests/test_cart.py)
-   failing runs: #1, #2, #3, #5, #9, #10, #11
-
- FLAKY  tests/test_discount.py::test_lucky_discount_is_small
-   failed 2/12 runs (17%, 95% CI 5%–45%)
-   error (2×): assert 0.8342156493018773 < 0.8  (tests/test_discount.py)
-   failing runs: #2, #7
-
-3 flaky · 0 broken · 4 stable  (7 tests × 12 runs in 2.0s)
-Replay this exact session: flakehound run --seed 7 -n 12
+5 flaky · 0 broken · 6 stable  (11 tests × 16 runs + 46 diagnosis runs in 8.7s)
 ```
 
 ### Options
@@ -59,25 +69,34 @@ Replay this exact session: flakehound run --seed 7 -n 12
 | `--seed N` | Replay an earlier session exactly |
 | `--json PATH` | Also write a machine-readable report |
 | `--timeout S` | Kill a single run after S seconds (default 600) |
+| `--no-diagnose` | Only detect flaky tests, don't explain them |
+| `--max-diagnose N` | Diagnose at most N flaky tests (default 20) |
 | `-- ARGS` | Anything after `--` goes straight to pytest |
 
 Exit codes: `0` no flaky tests, `1` flaky tests found, `2` usage or collection error.
 
 ## How it works
 
+flakehound changes **one factor at a time**, like a science experiment:
+
 1. **Shake.** Run the whole suite many times in parallel. Each run uses a different
-   test order, `random` seed and `PYTHONHASHSEED`, all recorded.
-2. **Classify.** Tests that both pass and fail are *flaky*; tests that always fail are
-   *broken* (a real bug, not flakiness). Failure rates come with 95% confidence intervals.
-3. **Diagnose** *(coming next)*. One factor at a time: find the exact polluter test and
-   the leaked state for order dependencies, and test seeds, timezones, dates and timing.
-4. **Verify** *(coming)*. Each diagnosis gets a repro command that must fail every
-   time, and a counterfactual that must pass.
+   test order, `random` seed and `PYTHONHASHSEED`, all recorded. Tests that both pass
+   and fail are *flaky*; tests that always fail are *broken* (a real bug).
+2. **Isolate.** Run each flaky test alone with the *exact seeds* of the runs where it
+   failed. Only the order changed, so if it now passes, order is proven to be the cause.
+3. **Find the culprit.** Try the tests whose position best correlates with the failure,
+   then shrink the list of preceding tests with delta debugging, in parallel batches.
+   Works for single polluters, combinations, and tests that *need* another test first.
+4. **Name the leaked state.** Snapshot global state before and after the culprit: module
+   variables, class and object attributes, environment variables (secret values are never
+   shown), working directory, `sys.path`, project files and logging config.
+5. **Confirm and verify.** Re-run culprit + victim, then run the printed plain-pytest
+   repro command for real and mark it *verified* only if it fails outside flakehound.
 
 ## Roadmap
 
 - [x] **M1** Core engine, parallel shuffled runs, terminal + JSON reports, demo
-- [ ] **M2** Order dependency: isolation, bisection to the polluter, *which state leaked*
+- [x] **M2** Order dependency: isolation, polluter/setter search, *which state leaked*, verified repros
 - [ ] **M3** Environment: random seed, hash seed, timezone, "danger day" dates
 - [ ] **M4** Timing: sleep shrinking, thread-switch stress, CPU load
 - [ ] **M5** Verified repro commands, Markdown/PR output, CI mode, quarantine
