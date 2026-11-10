@@ -1,0 +1,32 @@
+# Private working context (never pushed)
+PROJECT_CONTEXT.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# flakehound run artifacts
+.flakehound/runs/
+
+# Secrets / local env (never commit)
+.env
+.env.*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
