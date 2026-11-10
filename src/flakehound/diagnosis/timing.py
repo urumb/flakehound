@@ -49,6 +49,23 @@ _RACE_FIX = (
 )
 
 
+def _crash_note(results: Sequence[Any]) -> str:
+    errors = [r.error for r in results if r.crashed and r.error]
+    return f"; {len(errors)} run(s) did not finish: {errors[0]}" if errors else ""
+
+
+def _suspected(
+    victim: str, cause: EnvCause, condition: str, evidence: list[str], note: str, fix: str
+) -> EnvDiagnosis:
+    """A probe run hinted at a timing problem, but running alone didn't prove it."""
+    diag = EnvDiagnosis(victim, cause, latent=True, confirmed=False)
+    diag.condition = condition
+    diag.evidence = evidence
+    diag.note = note
+    diag.fix = fix
+    return diag
+
+
 def _fails(results: Sequence[bool | None]) -> tuple[int, int]:
     valid = [r for r in results if r is not None]
     return sum(valid), len(valid)
@@ -86,10 +103,24 @@ def check_short_waits(
     outs = [failed(r, victim) for r in results]
     normal_fail, normal_total = _fails(outs[:NORMAL_TRIALS])
     short_fail, short_total = _fails(outs[NORMAL_TRIALS:])
-    if not short_total or short_fail != short_total or normal_fail == normal_total:
-        return None
+    proven = short_total and short_fail == short_total and normal_fail < normal_total
     if latent and normal_fail:
-        return None  # a latent issue must pass normally
+        proven = False  # a latent issue must pass normally
+    if not proven:
+        if not latent:
+            return None
+        return _suspected(
+            victim,
+            EnvCause.TIMING,
+            "when its sleeps are shorter (a slower machine)",
+            [
+                "failed in the probe run with shorter sleeps, passed in the normal run",
+                f"alone, sleeps {1 / SLEEP_SCALE:g}x shorter: failed {short_fail}/{short_total}; "
+                f"normal: failed {normal_fail}/{normal_total}{_crash_note(results)}",
+            ],
+            "could not reproduce it alone every time, so this is unconfirmed",
+            _SLEEP_FIX_GENERIC,
+        )
 
     sites_info: list[dict[str, Any]] = list(known_sites)
     for r in results[NORMAL_TRIALS:]:
@@ -159,20 +190,32 @@ def check_thread_stress(
         sleep_sites=[],
         label="thread-stress",
     )
-    outs = [
-        failed(r, victim)
-        for r in executor.run_many([normal] * NORMAL_TRIALS + [stressed] * STRESS_TRIALS)
-    ]
+    runs = executor.run_many([normal] * NORMAL_TRIALS + [stressed] * STRESS_TRIALS)
+    outs = [failed(r, victim) for r in runs]
     n_fail, n_total = _fails(outs[:NORMAL_TRIALS])
     s_fail, s_total = _fails(outs[NORMAL_TRIALS:])
-    if not s_total or not n_total:
-        return None
     # Require a clear difference: at least half the stressed runs fail, and the
     # stressed failure rate is well above the normal one.
-    if s_fail * 2 < s_total or s_fail / s_total < n_fail / n_total + 0.5:
-        return None
+    proven = bool(s_total and n_total) and not (
+        s_fail * 2 < s_total or s_fail / s_total < n_fail / n_total + 0.5
+    )
     if latent and n_fail:
-        return None
+        proven = False
+    if not proven:
+        if not latent:
+            return None
+        return _suspected(
+            victim,
+            EnvCause.RACE,
+            "when threads switch more often (a race condition)",
+            [
+                "failed in the probe run with thread-switch stress, passed in the normal run",
+                f"alone, with frequent thread switches: failed {s_fail}/{s_total}; "
+                f"normal: failed {n_fail}/{n_total}{_crash_note(runs)}",
+            ],
+            "could not reproduce it alone clearly enough, so this is unconfirmed",
+            _RACE_FIX,
+        )
     diag = EnvDiagnosis(victim, EnvCause.RACE, latent=latent)
     diag.condition = "when threads switch more often (a race condition)"
     diag.evidence = [

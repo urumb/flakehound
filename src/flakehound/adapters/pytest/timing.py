@@ -9,7 +9,11 @@
 * **Call-site recording.** Every main-thread sleep is attributed to the first
   stack frame in the project's own code, so we can say *which* sleep matters.
 * **Thread-switch stress.** ``sys.setswitchinterval`` makes the interpreter
-  switch threads far more often, exposing races that are rare by default.
+  switch threads far more often, and a profile hook briefly yields the GIL
+  every time any thread enters a function of the project's own code. The
+  yield matters on systems (like macOS) where a waiting thread wakes up too
+  slowly for the switch interval alone to interleave short critical sections.
+  Together they expose races that are rare by default.
 
 ``time.monotonic``, ``perf_counter`` and ``asyncio.sleep`` are not touched.
 """
@@ -98,6 +102,8 @@ def install(
         _rebind_project_modules()
     if switch_interval is not None:
         sys.setswitchinterval(switch_interval)
+        threading.setprofile(_yield_on_call)
+        sys.setprofile(_yield_on_call)
 
 
 def _rebind_project_modules() -> None:
@@ -109,6 +115,21 @@ def _rebind_project_modules() -> None:
         for name, value in list(vars(module).items()):
             if value is _real_sleep:
                 setattr(module, name, _sleep)
+
+
+_project_code: dict[str, bool] = {}
+
+
+def _yield_on_call(frame: FrameType, event: str, arg: object) -> None:
+    """Profile hook: let other threads run whenever project code calls a function."""
+    if event != "call":
+        return
+    file = frame.f_code.co_filename
+    mine = _project_code.get(file)
+    if mine is None:
+        mine = _project_code[file] = is_project_file(file, _state.root)
+    if mine:
+        _real_sleep(1e-6)  # releases the GIL; a waiting thread can take over
 
 
 def set_current_test(nodeid: str | None) -> None:

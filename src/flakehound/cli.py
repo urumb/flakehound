@@ -167,7 +167,9 @@ def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> in
     if args.json is not None:
         write_json(report, args.json)
         console.print(f"[dim]JSON report written to {args.json}[/]", highlight=False)
-    problems = report.by_verdict(Verdict.FLAKY) or report.latent
+    # Fail the build only on what was observed or proven: flaky tests (they did
+    # flip) and confirmed latent issues. Suspected ones are reported, not fatal.
+    problems = bool(report.by_verdict(Verdict.FLAKY)) or any(d.confirmed for d in report.latent)
     return EXIT_FLAKY if problems else EXIT_OK
 
 
