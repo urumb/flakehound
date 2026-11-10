@@ -21,9 +21,11 @@ from datetime import date, datetime
 class Probe:
     name: str
     label: str  # completes "fails ...", e.g. "on the last day of the month"
-    kind: str  # "timezone" or "clock"
+    kind: str  # "timezone", "clock" or "timing"
     env: dict[str, str] = field(default_factory=dict)
     clock: str | None = None
+    sleep_scale: float | None = None
+    switch_interval: float | None = None
 
 
 def _next_leap_day(today: date) -> date:
@@ -38,12 +40,18 @@ def _at(day: date, hh: int, mm: int, ss: int) -> str:
     return datetime(day.year, day.month, day.day, hh, mm, ss).isoformat()
 
 
-def make_probes(today: date | None = None) -> list[Probe]:
+TIMING_PROBES = [
+    Probe("short_waits", "when its sleeps are shorter", "timing", sleep_scale=0.1),
+    Probe("thread_stress", "when threads switch more often", "timing", switch_interval=1e-6),
+]
+
+
+def make_probes(today: date | None = None, *, timing: bool = True) -> list[Probe]:
     """Danger moments close to today (within ~4 years), so nothing else breaks
     for unrelated reasons like expired test certificates."""
     today = today or date.today()
     last_day = today.replace(day=calendar.monthrange(today.year, today.month)[1])
-    return [
+    probes = [
         Probe("tz_utc_plus_14", "in timezone UTC+14", "timezone", env={"TZ": "FHT-14"}),
         Probe("tz_utc_minus_12", "in timezone UTC-12", "timezone", env={"TZ": "FHT+12"}),
         Probe("midnight", "two seconds before midnight", "clock", clock=_at(today, 23, 59, 58)),
@@ -61,6 +69,7 @@ def make_probes(today: date | None = None) -> list[Probe]:
             clock=_at(_next_leap_day(today), 12, 0, 0),
         ),
     ]
+    return probes + (TIMING_PROBES if timing else [])
 
 
 def describe_clock(clock: str) -> str:

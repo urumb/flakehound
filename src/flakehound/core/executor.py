@@ -28,6 +28,10 @@ class Request:
     label: str = ""
     env: dict[str, str] = field(default_factory=dict)
     clock: str | None = None
+    sleep_scale: float | None = None
+    sleep_sites: list[str] = field(default_factory=list)
+    switch_interval: float | None = None
+    record_sleeps: bool = False
 
 
 class Executor:
@@ -61,6 +65,10 @@ class Executor:
             label=req.label,
             env=dict(req.env),
             clock=req.clock,
+            sleep_scale=req.sleep_scale,
+            sleep_sites=list(req.sleep_sites),
+            switch_interval=req.switch_interval,
+            record_sleeps=req.record_sleeps,
         )
 
     def run_many(self, requests: Sequence[Request]) -> list[RunResult]:

@@ -93,7 +93,7 @@ def test_cli_exit_codes_and_json_has_no_secrets(make_project, monkeypatch, tmp_p
     text = out.read_text(encoding="utf-8")
     assert secret not in text
     data = json.loads(text)
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     assert data["summary"]["flaky"] >= 1
     assert "DEMO_API_TOKEN" not in text  # we never dump the environment
 

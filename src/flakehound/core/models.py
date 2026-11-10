@@ -52,6 +52,9 @@ class Repro:
     env: dict[str, str] = field(default_factory=dict)  # e.g. {"TZ": "FHT-14"}
     seed: int | None = None  # replay flakehound's per-test random seed
     clock: str | None = None  # shifted wall clock start
+    sleep_scale: float | None = None  # shorten main-thread sleeps by this factor
+    sleep_sites: list[str] = field(default_factory=list)  # ...only at these call sites
+    switch_interval: float | None = None  # thread-switch stress
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -71,6 +74,11 @@ class RunSpec:
     snapshot: list[str] = field(default_factory=list)
     # Local wall time the clock should read at start, e.g. "2026-12-31T23:59:58".
     clock: str | None = None
+    # Timing stress (see adapters/pytest/timing.py).
+    sleep_scale: float | None = None
+    sleep_sites: list[str] = field(default_factory=list)
+    switch_interval: float | None = None
+    record_sleeps: bool = False
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -86,6 +94,18 @@ class RunSpec:
             label=str(data.get("label", "")),
             snapshot=[str(x) for x in data.get("snapshot", [])],
             clock=None if data.get("clock") is None else str(data["clock"]),
+            sleep_scale=None if data.get("sleep_scale") is None else float(data["sleep_scale"]),
+            sleep_sites=[str(x) for x in data.get("sleep_sites", [])],
+            switch_interval=(
+                None if data.get("switch_interval") is None else float(data["switch_interval"])
+            ),
+            record_sleeps=bool(data.get("record_sleeps", False)),
+        )
+
+    @property
+    def stresses_timing(self) -> bool:
+        return (
+            self.sleep_scale is not None or self.switch_interval is not None or self.record_sleeps
         )
 
 
@@ -126,6 +146,8 @@ class RunResult:
     error: str = ""  # redacted reason when crashed
     # nodeid -> state it changed (only for tests listed in spec.snapshot)
     state_changes: dict[str, list[StateChange]] = field(default_factory=dict)
+    # nodeid -> main-thread sleep call sites [{"site", "seconds", "count"}]
+    sleep_sites: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     def outcome_of(self, nodeid: str) -> Outcome | None:
         for r in self.results:

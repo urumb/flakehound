@@ -16,10 +16,12 @@ from flakehound.core.procs import ProcessRegistry
 from flakehound.core.scheduler import private_workdir, run_all
 from flakehound.detectors.probes import Probe, make_probes
 from flakehound.detectors.shake import TestStats, Verdict, analyze, plan_rechecks, plan_runs
-from flakehound.diagnosis.env import EnvDiagnosis, confirm_probe, diagnose_seeds
+from flakehound.diagnosis.common import failed
+from flakehound.diagnosis.env import EnvCause, EnvDiagnosis, confirm_probe, diagnose_seeds
 from flakehound.diagnosis.order import OrderDiagnosis, diagnose_order
+from flakehound.diagnosis.timing import diagnose_timing
 
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -34,7 +36,7 @@ class Report:
     run_results: list[RunResult]
     diagnoses: dict[str, OrderDiagnosis] = field(default_factory=dict)
     env_diagnoses: dict[str, EnvDiagnosis] = field(default_factory=dict)
-    time_bombs: list[EnvDiagnosis] = field(default_factory=list)
+    latent: list[EnvDiagnosis] = field(default_factory=list)  # time bombs and racy tests
     probes: list[Probe] = field(default_factory=list)
     diagnosis_runs: int = 0
     not_diagnosed: int = 0  # flaky tests skipped because of --max-diagnose
@@ -63,7 +65,7 @@ class Report:
                 {"name": p.name, "label": p.label, "env": p.env, "clock": p.clock}
                 for p in self.probes
             ],
-            "time_bombs": [{"nodeid": d.nodeid, **d.to_json()} for d in self.time_bombs],
+            "latent": [{"nodeid": d.nodeid, **d.to_json()} for d in self.latent],
             "tests_detail": [
                 {
                     **s.to_json(),
@@ -97,6 +99,9 @@ def _probe_specs(base: RunSpec, probes: list[Probe], first_id: int) -> list[RunS
             hash_seed=base.hash_seed,
             env={**base.env, **p.env},
             clock=p.clock,
+            sleep_scale=p.sleep_scale,
+            switch_interval=p.switch_interval,
+            record_sleeps=p.sleep_scale is not None,
             label=f"probe {p.name}",
         )
         for i, p in enumerate(probes)
@@ -130,6 +135,7 @@ def run_session(
     diagnose: bool = True,
     max_diagnose: int = 20,
     probe: bool = True,
+    timing_probes: bool = True,
     on_collected: Callable[[int, int], None] | None = None,
     on_result: Callable[[RunResult], None] | None = None,
     on_diagnose_start: Callable[[int], None] | None = None,
@@ -139,9 +145,9 @@ def run_session(
     start = time.perf_counter()
     diagnoses: dict[str, OrderDiagnosis] = {}
     env_diagnoses: dict[str, EnvDiagnosis] = {}
-    time_bombs: list[EnvDiagnosis] = []
+    latent: list[EnvDiagnosis] = []
     diagnosis_runs = 0
-    probes = make_probes() if probe else []
+    probes = make_probes(timing=timing_probes) if probe else []
     with private_workdir() as workdir:
         test_ids = runner.collect(workdir)
         results: list[RunResult] = []
@@ -169,8 +175,12 @@ def run_session(
         victims = flaky[:max_diagnose] if diagnose else []
         broken = {s.nodeid for s in stats if s.verdict is Verdict.BROKEN}
         bombs: dict[str, list[Probe]] = {}
+        probe_sites: dict[str, list[dict[str, Any]]] = {}
         if diagnose and probe_results:
             bombs = _bomb_candidates(results[0], probe_results, probes, broken)
+            for pr in probe_results:
+                for nodeid, sites in pr.sleep_sites.items():
+                    probe_sites.setdefault(nodeid, []).extend(sites)
         if victims or bombs:
             if on_diagnose_start is not None:
                 on_diagnose_start(len(victims) + len(bombs))
@@ -185,12 +195,38 @@ def run_session(
                 # A truly random test can look order-dependent by chance in a few
                 # isolation runs; unless order is *confirmed*, check seeds too.
                 if not (order.is_order and order.confirmed):
-                    env_diagnoses[victim] = diagnose_seeds(victim, results, executor, runner)
+                    env = diagnose_seeds(victim, results, executor, runner)
+                    env_diagnoses[victim] = env
+                    if env.cause is EnvCause.NONDETERMINISTIC:
+                        # Same seeds as a run where it failed; only timing changes.
+                        failing = next(r.spec for r in results if failed(r, victim) is True)
+                        timing = diagnose_timing(victim, failing, executor, runner, latent=False)
+                        if timing is not None:
+                            timing.evidence.insert(0, env.evidence[0])
+                            env_diagnoses[victim] = timing
 
             def bomb_job(victim: str) -> None:
-                time_bombs.append(
-                    confirm_probe(victim, bombs[victim], baseline.spec, executor, runner)
-                )
+                found = bombs[victim]
+                env_probes = [p for p in found if p.kind != "timing"]
+                if env_probes:
+                    latent.append(
+                        confirm_probe(victim, env_probes, baseline.spec, executor, runner)
+                    )
+                names = {p.name for p in found if p.kind == "timing"}
+                if names:
+                    sites = probe_sites.get(victim, [])
+                    diag = diagnose_timing(
+                        victim,
+                        baseline.spec,
+                        executor,
+                        runner,
+                        latent=True,
+                        known_sites=sites,
+                        try_sleeps="short_waits" in names,
+                        try_threads="thread_stress" in names,
+                    )
+                    if diag is not None:
+                        latent.append(diag)
 
             try:
                 # Tests are diagnosed concurrently; the executor bounds the
@@ -207,7 +243,7 @@ def run_session(
                 raise
             executor.close()
             diagnosis_runs = executor.runs_used
-    time_bombs.sort(key=lambda d: d.nodeid)
+    latent.sort(key=lambda d: (d.nodeid, d.cause.value))
     return Report(
         runner=runner.name,
         master_seed=master_seed,
@@ -219,7 +255,7 @@ def run_session(
         run_results=results,
         diagnoses=diagnoses,
         env_diagnoses=env_diagnoses,
-        time_bombs=time_bombs,
+        latent=latent,
         probes=probes,
         diagnosis_runs=diagnosis_runs,
         not_diagnosed=len(flaky) - len(victims) if diagnose else 0,

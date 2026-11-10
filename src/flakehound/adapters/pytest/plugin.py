@@ -8,7 +8,8 @@ What it does, only when flakehound passes its options:
 * seeds ``random`` per test from the spec seed (deterministic and independent of order);
 * writes one JSON result per test (redacted failure message included);
 * snapshots global state around the tests listed in ``spec.snapshot``;
-* shifts the wall clock when the spec asks for it.
+* shifts the wall clock when the spec asks for it;
+* shortens main-thread sleeps / stresses thread switching when asked (timing.py).
 
 Two options are also meant for humans, to replay what flakehound found with
 plain pytest: ``--flakehound-seed=N`` (seed ``random`` per test exactly like a
@@ -29,7 +30,7 @@ from typing import Any
 
 import pytest
 
-from flakehound.adapters.pytest import clock, snapshot
+from flakehound.adapters.pytest import clock, snapshot, timing
 from flakehound.core.models import Outcome, RunSpec, StateChange, TestResult
 from flakehound.report.redact import redact, truncate
 
@@ -52,6 +53,26 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         metavar="ISO_DATETIME",
         help="make the wall clock start at this local time, e.g. 2026-12-31T23:59:58",
+    )
+    group.addoption(
+        "--flakehound-sleep-scale",
+        type=float,
+        default=None,
+        metavar="FACTOR",
+        help="shorten time.sleep() calls made by tests on the main thread by this factor",
+    )
+    group.addoption(
+        "--flakehound-sleep-sites",
+        default=None,
+        metavar="PATH:LINE,...",
+        help="only shorten sleeps called from these source lines",
+    )
+    group.addoption(
+        "--flakehound-switch-interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="thread switch interval (e.g. 1e-6) to expose race conditions",
     )
 
 
@@ -100,15 +121,19 @@ class _Worker:
     def pytest_runtest_protocol(
         self, item: pytest.Item, nextitem: pytest.Item | None
     ) -> Generator[None, None, None]:
-        watch = self.spec is not None and item.nodeid in self.spec.snapshot
-        if not watch:
-            yield
-            return
-        root = Path(str(item.config.rootpath))
-        before = snapshot.take(root)
-        yield  # setup, call and teardown of this test
-        after = snapshot.take(root)
-        self.state_changes[item.nodeid] = snapshot.diff(before, after)
+        timing.set_current_test(item.nodeid)
+        try:
+            watch = self.spec is not None and item.nodeid in self.spec.snapshot
+            if not watch:
+                yield
+                return
+            root = Path(str(item.config.rootpath))
+            before = snapshot.take(root)
+            yield  # setup, call and teardown of this test
+            after = snapshot.take(root)
+            self.state_changes[item.nodeid] = snapshot.diff(before, after)
+        finally:
+            timing.set_current_test(None)
 
     # --- results ----------------------------------------------------------
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
@@ -149,6 +174,11 @@ class _Worker:
                 "state_changes": {
                     nodeid: [c.to_json() for c in changes]
                     for nodeid, changes in self.state_changes.items()
+                },
+                "sleep_sites": {
+                    r.nodeid: [s.to_json() for s in timing.sites_for(r.nodeid)]
+                    for r in ordered
+                    if timing.sites_for(r.nodeid)
                 },
             },
         )
@@ -202,7 +232,11 @@ def pytest_configure(config: pytest.Config) -> None:
     collect_path = config.getoption("flakehound_collect_out")
     user_seed = config.getoption("flakehound_seed")
     user_clock = config.getoption("flakehound_clock")
-    if not (spec_path or collect_path or user_seed is not None or user_clock):
+    user_scale = config.getoption("flakehound_sleep_scale")
+    user_sites = config.getoption("flakehound_sleep_sites")
+    user_switch = config.getoption("flakehound_switch_interval")
+    user_timing = user_scale is not None or user_switch is not None
+    if not (spec_path or collect_path or user_seed is not None or user_clock or user_timing):
         return
     spec = None
     if spec_path:
@@ -213,6 +247,24 @@ def pytest_configure(config: pytest.Config) -> None:
             clock.install(target_clock, str(config.rootpath))
         except ValueError as exc:
             raise pytest.UsageError(f"--flakehound-clock: {exc}") from exc
+    if spec is not None and spec.stresses_timing:
+        timing.install(
+            str(config.rootpath),
+            scale=spec.sleep_scale,
+            only_sites=spec.sleep_sites or None,
+            switch_interval=spec.switch_interval,
+        )
+    elif spec is None and user_timing:
+        if user_scale is not None and not 0 < user_scale <= 1:
+            raise pytest.UsageError("--flakehound-sleep-scale must be in (0, 1]")
+        if user_switch is not None and user_switch <= 0:
+            raise pytest.UsageError("--flakehound-switch-interval must be positive")
+        timing.install(
+            str(config.rootpath),
+            scale=user_scale,
+            only_sites=[x for x in (user_sites or "").split(",") if x] or None,
+            switch_interval=user_switch,
+        )
     config.pluginmanager.register(
         _Worker(
             spec,

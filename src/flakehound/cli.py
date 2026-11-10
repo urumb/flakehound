@@ -81,7 +81,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--no-probes",
         action="store_true",
-        help="skip the timezone and danger-date probe runs (time bomb detection)",
+        help="skip all probe runs (timezones, risky dates, timing)",
+    )
+    run.add_argument(
+        "--no-timing",
+        action="store_true",
+        help="skip the timing probes (shorter sleeps, thread-switch stress)",
     )
     return parser
 
@@ -141,6 +146,7 @@ def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> in
                 diagnose=not args.no_diagnose,
                 max_diagnose=args.max_diagnose,
                 probe=not args.no_probes,
+                timing_probes=not args.no_timing,
                 on_collected=collected,
                 on_result=finished,
                 on_diagnose_start=diagnose_start,
@@ -161,7 +167,7 @@ def _cmd_run(args: argparse.Namespace, extra: list[str], console: Console) -> in
     if args.json is not None:
         write_json(report, args.json)
         console.print(f"[dim]JSON report written to {args.json}[/]", highlight=False)
-    problems = report.by_verdict(Verdict.FLAKY) or report.time_bombs
+    problems = report.by_verdict(Verdict.FLAKY) or report.latent
     return EXIT_FLAKY if problems else EXIT_OK
 
 

@@ -104,7 +104,7 @@ danger_day = pytest.mark.skipif(_today_is_a_danger_day(), reason="today is a mon
 def test_time_bombs_found_and_verified(make_project):
     root = make_project({"tests/test_dates.py": DATE_BOMBS})
     report = _session(root, runs=4, seed=1)
-    bombs = {_short(d.nodeid): d for d in report.time_bombs}
+    bombs = {_short(d.nodeid): d for d in report.latent}
     assert "test_fine" not in bombs
 
     month = bombs["test_month_end"]
@@ -129,12 +129,12 @@ def test_no_probes_flag_and_json(make_project, monkeypatch, tmp_path):
     out = tmp_path / "r.json"
     assert main(["run", "-n", "3", "-j", "4", "--seed", "1", "--json", str(out)]) == 1
     data = json.loads(out.read_text())
-    assert data["schema_version"] == 2
-    assert {_short(b["nodeid"]) for b in data["time_bombs"]} >= {"test_month_end", "test_tz"}
-    assert len(data["probes"]) == 6
+    assert data["schema_version"] == 3
+    assert {_short(b["nodeid"]) for b in data["latent"]} >= {"test_month_end", "test_tz"}
+    assert len(data["probes"]) == 8
 
     assert (
         main(["run", "-n", "3", "-j", "4", "--seed", "1", "--no-probes", "--json", str(out)]) == 0
     )
     data = json.loads(out.read_text())
-    assert data["time_bombs"] == [] and data["probes"] == []
+    assert data["latent"] == [] and data["probes"] == []

@@ -14,6 +14,7 @@ import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 from xml.etree import ElementTree
 
 from flakehound.adapters.base import CollectionError
@@ -96,6 +97,7 @@ class PytestRunner:
         duration = time.perf_counter() - start
         results: list[TestResult] = []
         state_changes: dict[str, list[StateChange]] = {}
+        sleep_sites: dict[str, list[dict[str, Any]]] = {}
         if out_path.exists():
             data = json.loads(out_path.read_text(encoding="utf-8"))
             results = [TestResult.from_json(r) for r in data["results"]]
@@ -103,6 +105,7 @@ class PytestRunner:
                 str(nodeid): [StateChange.from_json(c) for c in changes]
                 for nodeid, changes in data.get("state_changes", {}).items()
             }
+            sleep_sites = {str(k): list(v) for k, v in data.get("sleep_sites", {}).items()}
         crashed = res.timed_out or not out_path.exists()
         error = ""
         if res.timed_out:
@@ -110,7 +113,9 @@ class PytestRunner:
         elif crashed:
             tail = "\n".join((res.stdout + "\n" + res.stderr).strip().splitlines()[-20:])
             error = truncate(redact(f"worker exited with code {res.returncode}:\n{tail}"))
-        return RunResult(spec, results, res.returncode, duration, crashed, error, state_changes)
+        return RunResult(
+            spec, results, res.returncode, duration, crashed, error, state_changes, sleep_sites
+        )
 
     def repro_command(self, repro: Repro) -> list[str]:
         """A pytest command that reproduces a finding (env vars are listed separately).
@@ -119,12 +124,19 @@ class PytestRunner:
         Seed and clock replay need flakehound installed (they use its plugin).
         """
         cmd = ["pytest", "-p", "no:randomly", "-p", "no:cacheprovider"]
-        if repro.seed is not None or repro.clock is not None:
-            cmd += ["-p", PLUGIN]
+        flags = []
         if repro.seed is not None:
-            cmd.append(f"--flakehound-seed={repro.seed}")
+            flags.append(f"--flakehound-seed={repro.seed}")
         if repro.clock is not None:
-            cmd.append(f"--flakehound-clock={repro.clock}")
+            flags.append(f"--flakehound-clock={repro.clock}")
+        if repro.sleep_scale is not None:
+            flags.append(f"--flakehound-sleep-scale={repro.sleep_scale:g}")
+        if repro.sleep_sites:
+            flags.append("--flakehound-sleep-sites=" + ",".join(repro.sleep_sites))
+        if repro.switch_interval is not None:
+            flags.append(f"--flakehound-switch-interval={repro.switch_interval:g}")
+        if flags:
+            cmd += ["-p", PLUGIN, *flags]
         return [*cmd, *repro.order]
 
     def check_repro(self, repro: Repro) -> bool:

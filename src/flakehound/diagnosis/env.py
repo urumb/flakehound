@@ -34,6 +34,8 @@ class EnvCause(str, Enum):
     SEEDS_COMBINED = "random_and_hash_seed"
     TIMEZONE = "timezone"
     CLOCK = "clock"
+    TIMING = "timing"  # sleep used as a wait
+    RACE = "race"  # thread interleaving
     NONDETERMINISTIC = "nondeterministic"
     INCONCLUSIVE = "inconclusive"
 

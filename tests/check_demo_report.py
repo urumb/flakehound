@@ -25,6 +25,10 @@ TIME_BOMBS = {
     "test_anniversary_next_year": "clock",
     "test_order_date_matches_utc": "timezone",
 }
+TIMING = {
+    "test_upload_finishes": "timing",
+    "test_concurrent_top_ups": "race",
+}
 
 
 def _danger_day() -> bool:
@@ -58,11 +62,28 @@ def _check_bombs(report: dict[str, Any], problems: list[str]) -> None:
     if _danger_day():
         print("note: today is a danger day, the date time bombs go off for real; skipping")
         return
-    bombs = {b["nodeid"].split("::")[-1]: b for b in report["time_bombs"]}
+    bombs = {b["nodeid"].split("::")[-1]: b for b in report["latent"]}
     for name, cause in TIME_BOMBS.items():
         bomb = bombs.get(name) or {}
         if bomb.get("cause") != cause or bomb.get("repro_verified") is not True:
             problems.append(f"{name}: expected verified {cause} time bomb, got {bomb or 'nothing'}")
+
+
+def _check_timing(report: dict[str, Any], tests: dict[str, Any], problems: list[str]) -> None:
+    latent = {}
+    for item in report["latent"]:
+        latent.setdefault(item["nodeid"].split("::")[-1], []).append(item)
+    for name, cause in TIMING.items():
+        found = [x for x in latent.get(name, []) if x.get("cause") == cause]
+        # On a slow CI machine the bug may also show up in normal runs: then it is
+        # a flaky test whose diagnosis must be the same timing cause.
+        env = (tests.get(name) or {}).get("env_diagnosis") or {}
+        if env.get("cause") == cause:
+            found.append(env)
+        if not any(x.get("repro_verified") is True for x in found):
+            problems.append(
+                f"{name}: expected a verified {cause} diagnosis, got {found or 'nothing'}"
+            )
 
 
 def main(path: str) -> int:
@@ -73,10 +94,11 @@ def main(path: str) -> int:
     _check_order(tests, problems)
     _check_seeds(tests, problems)
     _check_bombs(report, problems)
+    _check_timing(report, tests, problems)
     for p in problems:
         print("FAIL", p)
     if not problems:
-        print("ok: order, seed and time bomb diagnoses correct, repros verified")
+        print("ok: order, seed, time bomb and timing diagnoses correct, repros verified")
     return 1 if problems else 0
 
 

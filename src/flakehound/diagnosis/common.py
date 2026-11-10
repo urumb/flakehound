@@ -27,6 +27,9 @@ def request(spec: RunSpec, order: list[str], **overrides: Any) -> Request:
         "hash_seed": spec.hash_seed,
         "env": dict(spec.env),
         "clock": spec.clock,
+        "sleep_scale": spec.sleep_scale,
+        "sleep_sites": list(spec.sleep_sites),
+        "switch_interval": spec.switch_interval,
     }
     fields.update(overrides)
     return Request(**fields)

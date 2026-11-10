@@ -54,3 +54,19 @@ class Inventory:
     @classmethod
     def restock(cls, item: str, qty: int) -> None:
         cls.stock[item] = cls.stock.get(item, 0) + qty
+
+
+class Wallet:
+    """Gift-card balance updated from several threads (trap: race condition)."""
+
+    def __init__(self) -> None:
+        self.balance = 0
+
+    def top_up(self, amount: int) -> None:
+        current = self.balance  # read...
+        new = self._apply_fee(current, amount)  # ...a call: another thread can run here...
+        self.balance = new  # ...write: may overwrite another thread's update
+
+    @staticmethod
+    def _apply_fee(balance: int, amount: int) -> int:
+        return balance + amount

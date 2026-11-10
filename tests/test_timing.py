@@ -1,0 +1,170 @@
+"""Timing detection: sleep-as-wait (with the exact call site) and race conditions."""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from flakehound.adapters.pytest.runner import PytestRunner
+from flakehound.cli import main
+from flakehound.core.procs import ProcessRegistry
+from flakehound.diagnosis.env import EnvCause
+from flakehound.session import run_session
+
+WAITS = """
+import threading
+import time
+
+
+class Job:
+    def __init__(self):
+        self.done = False
+
+    def run(self):
+        time.sleep(0.05)  # simulated work in a background thread: never shortened
+        self.done = True
+
+
+def test_waits_with_sleep():
+    time.sleep(0.02)  # harmless: nothing depends on it
+    job = Job()
+    threading.Thread(target=job.run, daemon=True).start()
+    time.sleep(0.3)  # the real problem: "should be long enough"
+    assert job.done
+
+
+def test_no_sleep():
+    assert True
+"""
+
+RACE = """
+import threading
+
+
+class Wallet:
+    def __init__(self):
+        self.balance = 0
+
+    def top_up(self, amount):
+        current = self.balance
+        new = self._add(current, amount)
+        self.balance = new
+
+    @staticmethod
+    def _add(a, b):
+        return a + b
+
+
+def test_race():
+    w = Wallet()
+    threads = [
+        threading.Thread(target=lambda: [w.top_up(1) for _ in range(2000)]) for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert w.balance == 8000
+
+
+def test_single_thread():
+    w = Wallet()
+    w.top_up(5)
+    assert w.balance == 5
+"""
+
+
+def _session(root: Path, **kw):
+    procs = ProcessRegistry()
+    return run_session(
+        PytestRunner(root, procs=procs, timeout=120),
+        procs,
+        runs=kw.pop("runs", 3),
+        workers=4,
+        master_seed=kw.pop("seed", 1),
+        **kw,
+    )
+
+
+def _latent(report):
+    return {d.nodeid.split("::")[-1]: d for d in report.latent}
+
+
+def test_sleep_used_as_wait_is_pinned_to_its_line(make_project):
+    root = make_project({"tests/test_waits.py": WAITS})
+    latent = _latent(_session(root))
+    d = latent["test_waits_with_sleep"]
+    assert d.cause is EnvCause.TIMING and d.latent and d.confirmed
+    assert "tests/test_waits.py:19" in d.condition  # the 0.3 s wait, not the harmless one
+    assert any("tests/test_waits.py:16" in e and "failed 0/2" in e for e in d.evidence)
+    assert "--flakehound-sleep-sites=tests/test_waits.py:19" in d.repro
+    assert d.repro_verified is True
+    assert "test_no_sleep" not in latent
+
+
+def test_race_condition_found_under_thread_stress(make_project):
+    root = make_project({"tests/test_race.py": RACE})
+    latent = _latent(_session(root))
+    d = latent["test_race"]
+    assert d.cause is EnvCause.RACE and d.confirmed
+    assert any(a.startswith("--flakehound-switch-interval=") for a in d.repro)
+    assert "Lock" in d.fix
+    assert "test_single_thread" not in latent
+
+
+def test_no_timing_flag(make_project, monkeypatch, tmp_path):
+    root = make_project({"tests/test_waits.py": WAITS})
+    monkeypatch.chdir(root)
+    out = tmp_path / "r.json"
+    assert main(["run", "-n", "2", "--seed", "1", "--json", str(out)]) == 1
+    data = json.loads(out.read_text())
+    assert data["schema_version"] == 3
+    assert [x["cause"] for x in data["latent"]] == ["timing"]
+
+    assert main(["run", "-n", "2", "--seed", "1", "--no-timing", "--json", str(out)]) == 0
+    data = json.loads(out.read_text())
+    assert data["latent"] == []
+    assert not any(p["name"] == "short_waits" for p in data["probes"])
+
+
+def _pytest(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "flakehound.adapters.pytest.plugin",
+            *args,
+        ],
+        cwd=root,
+        env=dict(os.environ),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+
+def test_sleep_options_shrink_only_the_named_site(make_project):
+    root = make_project({"tests/test_waits.py": WAITS})
+    target = "tests/test_waits.py::test_waits_with_sleep"
+    assert _pytest(root, "--flakehound-sleep-scale=0.1", target).returncode == 1
+    harmless = _pytest(
+        root,
+        "--flakehound-sleep-scale=0.1",
+        "--flakehound-sleep-sites=tests/test_waits.py:16",
+        target,
+    )
+    assert harmless.returncode == 0
+
+
+def test_invalid_sleep_scale_is_rejected(make_project):
+    root = make_project({"tests/test_waits.py": WAITS})
+    out = _pytest(root, "--flakehound-sleep-scale=5")
+    assert out.returncode != 0
+    assert "--flakehound-sleep-scale" in out.stdout + out.stderr

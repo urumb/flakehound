@@ -17,7 +17,9 @@ def test_probes_relative_to_today():
     assert probes["midnight"].clock == "2026-11-10T23:59:58"
     assert probes["leap_day"].clock == "2028-02-29T12:00:00"
     assert probes["tz_utc_plus_14"].env == {"TZ": "FHT-14"}  # POSIX sign is inverted
-    assert all(p.label.startswith(("on ", "in ", "two ")) for p in probes.values())
+    assert all(p.label.startswith(("on ", "in ", "two ", "when ")) for p in probes.values())
+    assert {"short_waits", "thread_stress"} <= set(probes)
+    assert not any(p.kind == "timing" for p in make_probes(date(2026, 11, 10), timing=False))
 
 
 def test_leap_day_edge_cases():

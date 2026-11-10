@@ -26,7 +26,10 @@ _ENV_CAUSE = {
     EnvCause.NONDETERMINISTIC: "NONDETERMINISTIC (not order, not seeds)",
     EnvCause.TIMEZONE: "TIMEZONE",
     EnvCause.CLOCK: "DATE/CLOCK",
+    EnvCause.TIMING: "TIMING (sleep used as a wait)",
+    EnvCause.RACE: "RACE CONDITION",
 }
+_TIMING_CAUSES = (EnvCause.TIMING, EnvCause.RACE)
 _MAX_RUN_IDS = 8
 
 
@@ -160,7 +163,8 @@ def _print_env(console: Console, d: EnvDiagnosis) -> None:
     status = "confirmed" if d.confirmed else "suspected"
     _field(console, "Cause", f"[bold magenta]{_ENV_CAUSE[d.cause]}[/] ({status})")
     if d.condition and not d.latent:
-        _field(console, "Fails", f"with {escape(d.condition)}")
+        prefix = "" if d.cause in _TIMING_CAUSES else "with "
+        _field(console, "Fails", f"{prefix}{escape(d.condition)}")
     for i, line in enumerate(d.evidence):
         if i == 0:
             _field(console, "Evidence", escape(line))
@@ -173,9 +177,12 @@ def _print_env(console: Console, d: EnvDiagnosis) -> None:
     _print_repro(console, d.repro, d.repro_env, d.repro_verified)
 
 
-def _print_time_bomb(console: Console, d: EnvDiagnosis) -> None:
-    console.print(Text(" TIME BOMB ", style=_BOMB_STYLE), Text(d.nodeid, style="bold"))
-    console.print(f"   passes today, but fails [bold]{escape(d.condition)}[/]", highlight=False)
+def _print_latent(console: Console, d: EnvDiagnosis) -> None:
+    racy = d.cause in _TIMING_CAUSES
+    label = " RACY " if racy else " TIME BOMB "
+    when = "passes normally" if racy else "passes today"
+    console.print(Text(label, style=_BOMB_STYLE), Text(d.nodeid, style="bold"))
+    console.print(f"   {when}, but fails [bold]{escape(d.condition)}[/]", highlight=False)
     _print_env(console, d)
     console.print()
 
@@ -223,8 +230,8 @@ def print_report(console: Console, report: Report) -> None:
     broken = report.by_verdict(Verdict.BROKEN)
     for s in flaky + broken:
         _print_test(console, s, report.diagnoses.get(s.nodeid), report.env_diagnoses.get(s.nodeid))
-    for bomb in report.time_bombs:
-        _print_time_bomb(console, bomb)
+    for issue in report.latent:
+        _print_latent(console, issue)
     if report.not_diagnosed:
         console.print(
             f"[dim]{report.not_diagnosed} more flaky tests were not diagnosed "
@@ -247,8 +254,11 @@ def print_report(console: Console, report: Report) -> None:
         f"{len(report.by_verdict(Verdict.STABLE))} stable",
     ]
     if report.probes:
-        bombs = len(report.time_bombs)
+        racy = sum(d.cause in _TIMING_CAUSES for d in report.latent)
+        bombs = len(report.latent) - racy
         parts.insert(2, f"[bold dark_orange3]{bombs} time bombs[/]" if bombs else "0 time bombs")
+        if any(p.kind == "timing" for p in report.probes):
+            parts.insert(3, f"[bold dark_orange3]{racy} racy[/]" if racy else "0 racy")
     skipped = len(report.by_verdict(Verdict.SKIPPED))
     if skipped:
         parts.append(f"{skipped} skipped")
