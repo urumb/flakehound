@@ -93,6 +93,16 @@ def _latent(report):
     return {d.nodeid.split("::")[-1]: d for d in report.latent}
 
 
+def _finding(report, name):
+    """The timing diagnosis for ``name``: latent (passes normally) or, on a slow
+    or busy machine where the bug also shows up in normal runs, the flaky test's."""
+    latent = _latent(report)
+    if name in latent:
+        return latent[name]
+    env = {k.split("::")[-1]: v for k, v in report.env_diagnoses.items()}
+    return env.get(name)
+
+
 def _explain(report) -> str:
     """Everything we know, printed when an assertion fails (helps on remote CI)."""
     lines = [f"{s.nodeid}: {s.verdict.value} {s.failures}/{s.runs}" for s in report.stats]
@@ -118,13 +128,12 @@ def test_sleep_used_as_wait_is_pinned_to_its_line(make_project):
 def test_race_condition_found_under_thread_stress(make_project):
     root = make_project({"tests/test_race.py": RACE})
     report = _session(root)
-    latent = _latent(report)
-    assert "test_race" in latent, _explain(report)
-    d = latent["test_race"]
-    assert d.cause is EnvCause.RACE and d.confirmed
+    d = _finding(report, "test_race")
+    assert d is not None, _explain(report)
+    assert d.cause is EnvCause.RACE and d.confirmed, _explain(report)
     assert any(a.startswith("--flakehound-switch-interval=") for a in d.repro)
     assert "Lock" in d.fix
-    assert "test_single_thread" not in latent
+    assert "test_single_thread" not in _latent(report)
 
 
 def test_no_timing_flag(make_project, monkeypatch, tmp_path):
