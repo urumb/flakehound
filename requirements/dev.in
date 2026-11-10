@@ -1,0 +1,8 @@
+# Development tools. Lock with:
+#   uv pip compile --universal --generate-hashes --python-version 3.10 requirements/dev.in -o requirements/dev.txt
+pytest>=7.0
+rich>=13.0
+ruff
+mypy
+hatchling
+editables

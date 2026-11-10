@@ -30,3 +30,6 @@ htmlcov/
 Thumbs.db
 .idea/
 .vscode/
+
+# Demo output
+demo/report.json
