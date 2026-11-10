@@ -24,7 +24,7 @@ class Job:
         self.done = False
 
     def run(self):
-        time.sleep(0.05)  # simulated work in a background thread: never shortened
+        time.sleep(0.1)  # simulated work in a background thread: never shortened
         self.done = True
 
 
