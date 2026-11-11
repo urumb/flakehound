@@ -4,6 +4,15 @@ All notable changes to flakehound are listed here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may break things).
 
+## [Unreleased]
+
+### Added
+- GitHub Action (`uses: urumb/flakehound@...`): installs flakehound from the action's own
+  source, runs it with your options, adds the Markdown report to the job summary, and
+  exposes `exit-code` and `report` outputs. Inputs reach the shell only via environment
+  variables (no script injection).
+- Issue forms (including "flakehound got it wrong"), a pull request template, Discussions.
+
 ## [0.1.0] - 2026-11-10
 
 First release. Python + pytest.
@@ -45,4 +54,5 @@ First release. Python + pytest.
   detector (the report says so instead of guessing).
 - Thread stress needs the race to happen around a Python function call.
 
+[Unreleased]: https://github.com/urumb/flakehound/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/urumb/flakehound/releases/tag/v0.1.0

@@ -66,7 +66,7 @@ problem. The same results as a Markdown report: [docs/example-report.md](https:/
 Exit codes: `0` no problems, `1` problems found (by default only flaky tests and *confirmed*
 time bombs or racy tests fail a build), `2` usage or collection error.
 
-## In CI
+## In CI (GitHub Action)
 
 Hunting runs your suite many times, so run it on a schedule rather than on every push:
 
@@ -85,11 +85,23 @@ jobs:
         with: { persist-credentials: false }
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with: { python-version: "3.12" }
-      - run: pip install -e . flakehound
-      - run: flakehound run --json flakehound.json
+      - run: pip install -e .            # your project and its test dependencies
+      - uses: urumb/flakehound@main      # pin to a release commit SHA in real use
+        with:
+          args: -n 20                    # any `flakehound run` options
 ```
 
-In GitHub Actions the Markdown report appears on the run's summary page automatically.
+| Input | Default | Meaning |
+|---|---|---|
+| `args` | `""` | Options for `flakehound run`, e.g. `-n 20 --fail-on flaky` |
+| `working-directory` | `.` | Where your tests live |
+| `report` | `flakehound-report.json` | JSON report path (an output, too) |
+
+The Markdown report appears on the run's summary page, and the step fails when
+problems are found (see `--fail-on`). Upload `flakehound-report.json` with
+`actions/upload-artifact` if you want to keep it, or feed it to
+`flakehound quarantine add --from-report`. Without the action, `pip install flakehound`
+and `flakehound run` work the same way.
 
 ## Quarantine
 
@@ -163,7 +175,6 @@ never loads into your normal pytest runs on its own.
 ## Roadmap
 
 - GitHub Actions history mode: find flaky tests from past CI runs without running anything
-- A ready-made GitHub Action
 - Adapters for Jest/Vitest, Go test and JUnit
 - Optional AI explanations (local models via Ollama, or your own key; never required)
 

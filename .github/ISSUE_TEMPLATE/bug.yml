@@ -1,0 +1,34 @@
+name: Bug report
+description: flakehound crashed, hung, or behaved incorrectly (not a diagnosis question).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "**Never paste tokens, passwords or private code.**"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. pip install flakehound
+        2. flakehound run ...
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or traceback
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions and OS
+      placeholder: flakehound 0.1.0, pytest 8.x, Python 3.12, Windows 11
+    validations:
+      required: true

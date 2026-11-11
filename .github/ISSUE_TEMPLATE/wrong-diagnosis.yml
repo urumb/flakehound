@@ -1,0 +1,42 @@
+name: flakehound got it wrong
+description: It missed a flaky test, blamed the wrong cause, or a repro didn't reproduce.
+labels: ["diagnosis"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Diagnosis bugs are the most valuable reports. **Never paste tokens, passwords
+        or private code.** flakehound redacts secrets from its reports, but please double-check.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Which test, what flakehound said, and what you believe the real cause is.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest test code that shows it
+      description: Ideally a tiny project (one or two test files) we can run.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: flakehound output
+      description: The terminal output, or the relevant part of the JSON report (--json).
+      render: text
+  - type: input
+    id: command
+    attributes:
+      label: Command you ran
+      placeholder: flakehound run -n 20 --seed 1234
+  - type: input
+    id: versions
+    attributes:
+      label: Versions and OS
+      placeholder: flakehound 0.1.0, pytest 8.x, Python 3.12, Ubuntu 24.04
+    validations:
+      required: true

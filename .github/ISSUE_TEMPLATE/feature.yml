@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest a new detector, output, or workflow.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What flaky-test pain would this solve? A real example helps most.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Project principles
+      options:
+        - label: It works without paid services, accounts or network access (or is clearly opt-in).
+          required: true
