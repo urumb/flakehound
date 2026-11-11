@@ -35,7 +35,7 @@ class Uploader:
         threading.Thread(target=self._work, daemon=True).start()
 
     def _work(self) -> None:
-        time.sleep(0.05)  # pretend network work
+        time.sleep(0.01)  # pretend network work (the test waits 0.06 s: fine on most machines)
         self.done = True
 
 
