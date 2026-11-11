@@ -86,7 +86,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with: { python-version: "3.12" }
       - run: pip install -e .            # your project and its test dependencies
-      - uses: urumb/flakehound@main      # pin to a release commit SHA in real use
+      - uses: urumb/flakehound@v0.1.1    # or pin the release's commit SHA
         with:
           args: -n 20                    # any `flakehound run` options
 ```

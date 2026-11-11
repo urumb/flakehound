@@ -1,6 +1,6 @@
 ## flakehound report
 
-**5 flaky tests, 3 time bombs, 2 racy tests** (10 stable). 15 tests × 12 runs + 8 probe runs + 87 diagnosis runs in 65.7s.
+**5 flaky tests, 3 time bombs, 2 racy tests** (10 stable). 15 tests × 12 runs + 8 probe runs + 89 diagnosis runs in 46.9s.
 
 ### Flaky tests
 
@@ -118,7 +118,7 @@ Pass today, but fail on certain dates or in other timezones.
 |---|---|---|
 | `tests/test_dates.py::test_anniversary_next_year` | passes today, but fails on a leap day (Feb 29) | Date/clock (confirmed) |
 | `tests/test_dates.py::test_coupon_valid_until_tomorrow` | passes today, but fails on the last day of the month, on New Year's Eve, two seconds before midnight and on a leap day (Feb 29) | Date/clock (confirmed) |
-| `tests/test_dates.py::test_order_date_matches_utc` | passes today, but fails in timezone UTC+14 | Timezone (confirmed) |
+| `tests/test_dates.py::test_order_date_matches_utc` | passes today, but fails in timezone UTC+14 and in timezone UTC-12 | Timezone (confirmed) |
 
 <details>
 <summary><code>tests/test_dates.py::test_anniversary_next_year</code>: Date/clock (confirmed)</summary>
@@ -161,10 +161,11 @@ pytest -p no:randomly -p no:cacheprovider -n 0 -p flakehound.adapters.pytest.plu
 <details>
 <summary><code>tests/test_dates.py::test_order_date_matches_utc</code>: Timezone (confirmed)</summary>
 
-- **Result:** passes today, but fails in timezone UTC+14
+- **Result:** passes today, but fails in timezone UTC+14 and in timezone UTC-12
 - **Evidence:**
   - passed in the normal run, failed in the same run with only the timezone changed
   - alone, in timezone UTC+14: failed 2/2
+  - alone, in timezone UTC-12: failed 2/2
   - alone, with the real clock and timezone: passed
 - **Fix:** the code mixes local time and UTC (e.g. `datetime.now()` or `date.today()` next to UTC values): use timezone-aware datetimes consistently, e.g. `datetime.now(timezone.utc)`
 
@@ -215,4 +216,4 @@ pytest -p no:randomly -p no:cacheprovider -n 0 -p flakehound.adapters.pytest.plu
 
 </details>
 
-<sub>flakehound 0.1.0 · replay this session: `flakehound run --seed 7 -n 12`</sub>
+<sub>flakehound 0.1.1 · replay this session: `flakehound run --seed 7 -n 12`</sub>

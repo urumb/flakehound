@@ -6,12 +6,19 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-11
+
 ### Added
 - GitHub Action (`uses: urumb/flakehound@...`): installs flakehound from the action's own
   source, runs it with your options, adds the Markdown report to the job summary, and
   exposes `exit-code` and `report` outputs. Inputs reach the shell only via environment
   variables (no script injection).
 - Issue forms (including "flakehound got it wrong"), a pull request template, Discussions.
+
+### Fixed
+- Demo: the upload test's background work was too close to its wait, so on busy CI
+  machines it could fail in normal runs; it now passes normally and still fails clearly
+  when sleeps are shortened.
 
 ## [0.1.0] - 2026-11-10
 
@@ -54,5 +61,6 @@ First release. Python + pytest.
   detector (the report says so instead of guessing).
 - Thread stress needs the race to happen around a Python function call.
 
-[Unreleased]: https://github.com/urumb/flakehound/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/urumb/flakehound/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/urumb/flakehound/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urumb/flakehound/releases/tag/v0.1.0
