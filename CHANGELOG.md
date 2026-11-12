@@ -6,6 +6,13 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
 
 ## [Unreleased]
 
+### Security
+- Redaction now fully removes GitHub's new stateless App installation tokens (including
+  Actions' `GITHUB_TOKEN`): `ghs_` + a ~520-character JWT with dots. Before, only the part
+  up to the first dot was redacted, so the rest of such a token could appear in a report
+  if a test printed it (the exact value of a `*TOKEN*` environment variable was already
+  redacted separately).
+
 ## [0.1.2] - 2026-11-12
 
 Fixes found by running flakehound on click, attrs and python-dateutil.

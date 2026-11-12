@@ -15,7 +15,10 @@ REDACTED = "[REDACTED]"
 
 # Well-known token formats.
 _TOKEN_PATTERNS = [
-    r"gh[pousr]_[A-Za-z0-9]{20,}",  # GitHub tokens
+    # GitHub tokens. App installation tokens (incl. Actions' GITHUB_TOKEN) are now
+    # ~520-char JWTs ("ghs_" + header.payload.signature), so allow `.`, `_` and `-`
+    # and no upper length limit; otherwise the payload and signature would leak.
+    r"gh[pousr]_[A-Za-z0-9_.-]{20,}",
     r"github_pat_[A-Za-z0-9_]{20,}",
     r"(?:AKIA|ASIA)[A-Z0-9]{16}",  # AWS access key ids
     r"xox[abprs]-[A-Za-z0-9-]{10,}",  # Slack

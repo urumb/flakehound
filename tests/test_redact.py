@@ -46,3 +46,17 @@ def test_plain_text_untouched():
 def test_truncate():
     assert truncate("abc", 10) == "abc"
     assert len(truncate("x" * 5000, 100)) <= 100
+
+
+def test_stateless_github_app_token_is_fully_redacted():
+    # New GitHub App installation tokens (and Actions' GITHUB_TOKEN): "ghs_" + a JWT,
+    # ~520 chars with dots, dashes and underscores. No part of it may survive.
+    header = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"
+    payload = "eyJpc3MiOiJnaXRodWIiLCJleHAiOjE3OTk5OTk5OTl9" + "Ab-_9z" * 60
+    signature = "c2lnbmF0dXJl-_" * 12
+    token = "ghs" + "_" + ".".join([header, payload, signature])
+    assert len(token) > 500
+    out = redact(f"Authorization failed for {token}.", environ={})
+    assert out == f"Authorization failed for {REDACTED}"
+    for part in (header, payload[:40], signature[:20]):
+        assert part not in out
