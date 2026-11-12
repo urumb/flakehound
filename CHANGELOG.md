@@ -6,6 +6,10 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-12
+
+Fixes found by running flakehound on click, attrs and python-dateutil.
+
 ### Added
 - A run that hangs and hits `--timeout` now names the test it was stuck in.
 - OpenSSF Scorecard workflow and badge (independent check of the repo's security practices).
@@ -18,6 +22,8 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
   *own* offset. A test that fails there too (it breaks whenever `TZ` is set, like two of
   python-dateutil's tests) is reported as "suspected", with the real reason and a
   matching fix, instead of as a confirmed timezone time bomb.
+- A probe failure that never happens again when the test is re-run alone (e.g. a
+  Hypothesis deadline on a busy machine, seen in attrs) is no longer reported as a time bomb.
 
 ## [0.1.1] - 2026-11-11
 
@@ -74,6 +80,7 @@ First release. Python + pytest.
   detector (the report says so instead of guessing).
 - Thread stress needs the race to happen around a Python function call.
 
-[Unreleased]: https://github.com/urumb/flakehound/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/urumb/flakehound/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/urumb/flakehound/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/urumb/flakehound/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urumb/flakehound/releases/tag/v0.1.0
