@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-13
+
 ### Security
 - Redaction now fully removes GitHub's new stateless App installation tokens (including
   Actions' `GITHUB_TOKEN`): `ghs_` + a ~520-character JWT with dots. Before, only the part
@@ -87,7 +89,8 @@ First release. Python + pytest.
   detector (the report says so instead of guessing).
 - Thread stress needs the race to happen around a Python function call.
 
-[Unreleased]: https://github.com/urumb/flakehound/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/urumb/flakehound/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/urumb/flakehound/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/urumb/flakehound/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/urumb/flakehound/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/urumb/flakehound/releases/tag/v0.1.0

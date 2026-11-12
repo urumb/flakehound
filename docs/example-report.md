@@ -216,4 +216,4 @@ pytest -p no:randomly -p no:cacheprovider -n 0 -p flakehound.adapters.pytest.plu
 
 </details>
 
-<sub>flakehound 0.1.2 · replay this session: `flakehound run --seed 7 -n 12`</sub>
+<sub>flakehound 0.1.3 · replay this session: `flakehound run --seed 7 -n 12`</sub>
