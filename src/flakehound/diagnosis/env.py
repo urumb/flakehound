@@ -21,7 +21,7 @@ from typing import Any
 from flakehound.adapters.base import Runner
 from flakehound.core.executor import Executor
 from flakehound.core.models import Repro, RunResult, RunSpec
-from flakehound.detectors.probes import Probe, describe_clock
+from flakehound.detectors.probes import Probe, describe_clock, local_offset_probe
 from flakehound.diagnosis.common import failed, request, verify_repro
 
 SEED_PAIRS = 2
@@ -94,6 +94,12 @@ _FIXES = {
         "`datetime.now(timezone.utc)`"
     ),
 }
+
+_TZ_SETTING_FIX = (
+    "the test (or the code) behaves differently when the `TZ` environment variable is set: "
+    "make it independent of `TZ`, or set/unset `TZ` explicitly in the test "
+    '(e.g. `monkeypatch.delenv("TZ", raising=False)`)'
+)
 
 _CLOCK_FIXES = {
     "midnight": (
@@ -228,8 +234,12 @@ def confirm_probe(
     baseline: RunSpec,
     executor: Executor,
     runner: Runner,
-) -> EnvDiagnosis:
-    """``probes``: the probes under which ``victim`` failed in its full-suite probe run."""
+) -> EnvDiagnosis | None:
+    """``probes``: the probes under which ``victim`` failed in its full-suite probe run.
+
+    Returns None when no probe failure happens again with the test run alone: a
+    one-off failure (e.g. a timeout on a busy machine) is not a time bomb.
+    """
     start = executor.runs_used
     alone = [victim]
     reqs = [request(baseline, alone, label="probe-baseline")]
@@ -244,8 +254,20 @@ def confirm_probe(
             )
             for _ in range(PROBE_TRIALS)
         ]
+    control = local_offset_probe() if any(p.kind == "timezone" for p in probes) else None
+    if control is not None:
+        reqs += [
+            request(
+                baseline,
+                alone,
+                env={**baseline.env, **control.env},
+                label="probe-tz-control",
+            )
+            for _ in range(PROBE_TRIALS)
+        ]
     results = [failed(r, victim) for r in executor.run_many(reqs)]
     base = results[0]
+    control_outs = results[1 + len(probes) * PROBE_TRIALS :]
     confirmed_probes: list[Probe] = []
     evidence = []
     for i, probe in enumerate(probes):
@@ -256,6 +278,9 @@ def confirm_probe(
         if valid and fails == valid:
             confirmed_probes.append(probe)
 
+    probe_outs = results[1 : 1 + len(probes) * PROBE_TRIALS]
+    if base is False and False in probe_outs and True not in probe_outs:
+        return None
     main = confirmed_probes[0] if confirmed_probes else probes[0]
     cause = EnvCause.TIMEZONE if main.kind == "timezone" else EnvCause.CLOCK
     diag = EnvDiagnosis(victim, cause, latent=True)
@@ -279,7 +304,23 @@ def confirm_probe(
         if cause is EnvCause.TIMEZONE
         else _CLOCK_FIXES.get(main.name, _DATE_FIX.format(label=main.label))
     )
-    if confirmed_probes and base is False:
+    tz_setting = False
+    if control is not None and control_outs:
+        fails = sum(bool(o) for o in control_outs)
+        valid = sum(o is not None for o in control_outs)
+        diag.evidence.append(
+            f"alone, {control.label} ({control.env['TZ']}): failed {fails}/{valid}"
+        )
+        tz_setting = cause is EnvCause.TIMEZONE and valid > 0 and fails == valid
+    if tz_setting:
+        # Same offset as now, still fails: the time difference is not the problem.
+        diag.condition = "when the TZ environment variable is set (even to the current offset)"
+        diag.note = (
+            "it also fails with TZ set to this machine's own offset, so the cause is TZ being "
+            "set (or its format), not the time difference"
+        )
+        diag.fix = _TZ_SETTING_FIX
+    elif confirmed_probes and base is False:
         repro = Repro(alone, env=dict(main.env), clock=main.clock)
         diag.repro = runner.repro_command(repro)
         diag.repro_env = dict(repro.env)

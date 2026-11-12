@@ -4,6 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/flakehound.svg)](https://pypi.org/project/flakehound/)
 [![CI](https://github.com/urumb/flakehound/actions/workflows/ci.yml/badge.svg)](https://github.com/urumb/flakehound/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/urumb/flakehound/actions/workflows/codeql.yml/badge.svg)](https://github.com/urumb/flakehound/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/urumb/flakehound/badge)](https://scorecard.dev/viewer/?uri=github.com/urumb/flakehound)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/urumb/flakehound/blob/main/LICENSE)
 
 **Find flaky tests and prove *why* they're flaky.**

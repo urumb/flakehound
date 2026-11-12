@@ -31,6 +31,7 @@ from typing import Any
 import pytest
 
 from flakehound.adapters.pytest import clock, snapshot, timing
+from flakehound.adapters.pytest.paths import current_test_path
 from flakehound.core.models import Outcome, RunSpec, StateChange, TestResult
 from flakehound.report.redact import redact, truncate
 
@@ -122,6 +123,9 @@ class _Worker:
         self, item: pytest.Item, nextitem: pytest.Item | None
     ) -> Generator[None, None, None]:
         timing.set_current_test(item.nodeid)
+        if self.spec is not None and self.out is not None:
+            # If this run hangs and is killed, the runner can say which test hung.
+            current_test_path(self.out).write_text(item.nodeid, encoding="utf-8")
         try:
             watch = self.spec is not None and item.nodeid in self.spec.snapshot
             if not watch:

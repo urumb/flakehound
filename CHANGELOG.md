@@ -6,6 +6,19 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
 
 ## [Unreleased]
 
+### Added
+- A run that hangs and hits `--timeout` now names the test it was stuck in.
+- OpenSSF Scorecard workflow and badge (independent check of the repo's security practices).
+
+### Fixed
+- The thread-stress probe could be 50× slower than a normal run (it timed out on click's
+  suite on Windows): it now only yields to other threads when there are other threads,
+  so single-threaded tests run at full speed.
+- Timezone findings are now checked against a control run with `TZ` set to the machine's
+  *own* offset. A test that fails there too (it breaks whenever `TZ` is set, like two of
+  python-dateutil's tests) is reported as "suspected", with the real reason and a
+  matching fix, instead of as a confirmed timezone time bomb.
+
 ## [0.1.1] - 2026-11-11
 
 ### Added

@@ -138,3 +138,64 @@ def test_no_probes_flag_and_json(make_project, monkeypatch, tmp_path):
     )
     data = json.loads(out.read_text())
     assert data["latent"] == [] and data["probes"] == []
+
+
+TZ_SETTING = """
+import os
+
+def test_needs_tz_unset():
+    # Breaks whenever TZ is set at all, whatever the offset (like a cache keyed on TZ).
+    assert "TZ" not in os.environ
+"""
+
+
+def test_tz_variable_dependence_is_not_called_a_timezone_bug(make_project, monkeypatch):
+    monkeypatch.delenv("TZ", raising=False)
+    root = make_project({"tests/test_tzvar.py": TZ_SETTING})
+    report = _session(root, runs=2, seed=1)
+    [diag] = report.latent
+    assert diag.cause is EnvCause.TIMEZONE
+    assert not diag.confirmed  # reported as suspected, so it doesn't fail the build
+    assert "TZ environment variable is set" in diag.condition
+    assert "own offset" in diag.note
+    assert "monkeypatch.delenv" in diag.fix
+    assert any("own UTC offset" in e for e in diag.evidence)
+
+
+def test_posix_tz_strings():
+    from datetime import timedelta
+
+    from flakehound.detectors.probes import local_offset_probe, posix_tz
+
+    assert posix_tz(timedelta(hours=14)) == "FHT-14"
+    assert posix_tz(timedelta(hours=-12)) == "FHT+12"
+    assert posix_tz(timedelta(hours=5, minutes=30)) == "FHT-5:30"
+    assert posix_tz(timedelta(hours=-3, minutes=-30)) == "FHT+3:30"
+    assert posix_tz(timedelta(0)) == "FHT+0"
+    assert local_offset_probe(timedelta(hours=1)).env == {"TZ": "FHT-1"}
+
+
+ONE_OFF = """
+import os
+from pathlib import Path
+
+MARK = Path(__file__).with_name("failed-once.txt")
+
+def test_one_off_failure():
+    # Fails the first time it runs with TZ set, then never again (like a timeout
+    # on a busy machine): that is not a time bomb.
+    if os.environ.get("TZ") and not MARK.exists():
+        MARK.write_text("x")
+        raise AssertionError("one-off")
+"""
+
+
+def test_probe_failure_that_never_repeats_is_not_reported(make_project, monkeypatch):
+    monkeypatch.delenv("TZ", raising=False)
+    root = make_project({"tests/test_once.py": ONE_OFF})
+    report = _session(root, runs=2, seed=1)
+    from flakehound.diagnosis.common import failed
+
+    victim = "tests/test_once.py::test_one_off_failure"
+    assert any(failed(r, victim) for r in report.probe_results)  # it did fail once
+    assert report.latent == []

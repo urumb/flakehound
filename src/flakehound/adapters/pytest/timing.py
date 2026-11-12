@@ -128,7 +128,9 @@ def _yield_on_call(frame: FrameType, event: str, arg: object) -> None:
     mine = _project_code.get(file)
     if mine is None:
         mine = _project_code[file] = is_project_file(file, _state.root)
-    if mine:
+    # Yielding costs ~1 ms on Windows, so only do it when there is another thread
+    # to switch to: single-threaded tests (most of them) then run at full speed.
+    if mine and threading.active_count() > 1:
         _real_sleep(1e-6)  # releases the GIL; a waiting thread can take over
 
 

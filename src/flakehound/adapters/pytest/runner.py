@@ -18,6 +18,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 from flakehound.adapters.base import CollectionError
+from flakehound.adapters.pytest.paths import current_test_path
 from flakehound.core.models import Repro, RunResult, RunSpec, StateChange, TestResult
 from flakehound.core.procs import ProcessRegistry
 from flakehound.report.redact import redact, truncate
@@ -133,6 +134,11 @@ class PytestRunner:
         error = ""
         if res.timed_out:
             error = f"run timed out after {self.timeout:.0f}s"
+            current = current_test_path(out_path)
+            if current.exists():
+                hung = current.read_text(encoding="utf-8", errors="replace").strip()
+                hung = truncate(redact(hung))
+                error += f" while running {hung} (it may hang or wait forever)"
         elif crashed:
             tail = "\n".join((res.stdout + "\n" + res.stderr).strip().splitlines()[-20:])
             error = truncate(redact(f"worker exited with code {res.returncode}:\n{tail}"))

@@ -68,11 +68,19 @@ def test_collection_error_is_reported(make_project, tmp_path: Path):
 
 
 def test_timeout_is_reported_as_crash(make_project, tmp_path: Path):
-    root = make_project({"tests/test_hang.py": "import time\ndef test():\n    time.sleep(60)\n"})
-    runner = PytestRunner(root, procs=ProcessRegistry(), timeout=3)
-    result = runner.run(RunSpec(0, ["tests/test_hang.py::test"], 1), tmp_path)
+    root = make_project(
+        {
+            "tests/test_hang.py": (
+                "import time\ndef test_quick():\n    pass\ndef test_hangs():\n    time.sleep(60)\n"
+            )
+        }
+    )
+    runner = PytestRunner(root, procs=ProcessRegistry(), timeout=8)
+    order = ["tests/test_hang.py::test_quick", "tests/test_hang.py::test_hangs"]
+    result = runner.run(RunSpec(0, order, 1), tmp_path)
     assert result.crashed
     assert "timed out" in result.error
+    assert "while running tests/test_hang.py::test_hangs" in result.error
 
 
 def test_cli_exit_codes_and_json_has_no_secrets(make_project, monkeypatch, tmp_path: Path):

@@ -229,9 +229,9 @@ def run_session(
                 found = bombs[victim]
                 env_probes = [p for p in found if p.kind != "timing"]
                 if env_probes:
-                    latent.append(
-                        confirm_probe(victim, env_probes, baseline.spec, executor, runner)
-                    )
+                    bomb = confirm_probe(victim, env_probes, baseline.spec, executor, runner)
+                    if bomb is not None:
+                        latent.append(bomb)
                 names = {p.name for p in found if p.kind == "timing"}
                 if names:
                     sites = probe_sites.get(victim, [])

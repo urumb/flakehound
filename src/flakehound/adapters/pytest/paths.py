@@ -11,6 +11,7 @@ import functools
 import os
 import sys
 import sysconfig
+from pathlib import Path
 
 
 @functools.lru_cache(maxsize=4096)
@@ -51,3 +52,8 @@ def is_project_file(file: str, root: str) -> bool:
     if not is_under(path, root) or is_under(path, OWN_PACKAGE):
         return False
     return not any(is_under(path, lib) for lib in library_roots())
+
+
+def current_test_path(out: Path) -> Path:
+    """File holding the id of the test a worker is running right now (next to ``out``)."""
+    return out.with_name(out.name + ".current")

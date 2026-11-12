@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 
 @dataclass(frozen=True)
@@ -73,6 +73,30 @@ def make_probes(today: date | None = None, *, timing: bool = True) -> list[Probe
         ),
     ]
     return probes + (TIMING_PROBES if timing else [])
+
+
+def posix_tz(offset: timedelta) -> str:
+    """A POSIX TZ string for a fixed UTC offset (sign inverted: UTC+5:30 is ``FHT-5:30``)."""
+    minutes = round(offset.total_seconds() / 60)
+    sign = "-" if minutes > 0 else "+"
+    hours, mins = divmod(abs(minutes), 60)
+    return f"FHT{sign}{hours}" + (f":{mins:02d}" if mins else "")
+
+
+def local_offset_probe(offset: timedelta | None = None) -> Probe:
+    """Control for timezone findings: ``TZ`` set, but to this machine's own offset.
+
+    If a test fails here too, it breaks because ``TZ`` is set (or because of its
+    format), not because of the time difference.
+    """
+    if offset is None:
+        offset = datetime.now().astimezone().utcoffset() or timedelta(0)
+    return Probe(
+        "tz_local_offset",
+        "with TZ set to this machine's own UTC offset",
+        "timezone",
+        env={"TZ": posix_tz(offset)},
+    )
 
 
 def describe_clock(clock: str) -> str:
