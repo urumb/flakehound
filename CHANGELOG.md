@@ -15,6 +15,10 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
   if a test printed it (the exact value of a `*TOKEN*` environment variable was already
   redacted separately).
 
+### Fixed
+- Demo: the upload test's margins now also work on Windows with Python 3.10, where the
+  shortest possible sleep is ~15 ms (the test waits 0.15 s for 0.03 s of work).
+
 ## [0.1.2] - 2026-11-12
 
 Fixes found by running flakehound on click, attrs and python-dateutil.

@@ -183,15 +183,15 @@ Pass normally, but fail on a slower machine or when threads interleave.
 
 | Test | Result | Cause |
 |---|---|---|
-| `tests/test_upload.py::test_upload_finishes` | passes normally, but fails when the `sleep(0.06)` at tests/test_upload.py:9 is shorter (a slower machine) | Timing (sleep used as a wait) (confirmed) |
+| `tests/test_upload.py::test_upload_finishes` | passes normally, but fails when the `sleep(0.15)` at tests/test_upload.py:9 is shorter (a slower machine) | Timing (sleep used as a wait) (confirmed) |
 | `tests/test_wallet.py::test_concurrent_top_ups` | passes normally, but fails when threads switch more often (a race condition) | Race condition (confirmed) |
 
 <details>
 <summary><code>tests/test_upload.py::test_upload_finishes</code>: Timing (sleep used as a wait) (confirmed)</summary>
 
-- **Result:** passes normally, but fails when the `sleep(0.06)` at tests/test_upload.py:9 is shorter (a slower machine)
+- **Result:** passes normally, but fails when the `sleep(0.15)` at tests/test_upload.py:9 is shorter (a slower machine)
 - **Evidence:** alone, main-thread sleeps 20x shorter: failed 3/3; normal: failed 0/2
-- **Fix:** `sleep(0.06)` at tests/test_upload.py:9 is used to wait for work that isn't guaranteed to be finished; wait for the actual event instead: `thread.join(timeout)`, `threading.Event().wait(timeout)`, or poll the condition with a deadline
+- **Fix:** `sleep(0.15)` at tests/test_upload.py:9 is used to wait for work that isn't guaranteed to be finished; wait for the actual event instead: `thread.join(timeout)`, `threading.Event().wait(timeout)`, or poll the condition with a deadline
 
 Reproduce (verified):
 

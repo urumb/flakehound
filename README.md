@@ -30,7 +30,7 @@ and a command that reproduces it. It also finds problems that haven't bitten you
 | **Randomness** | `assert random.random() < 0.8` | the failing seed, and a repro that replays it |
 | **Set/dict ordering** | comparing `",".join(a_set)` to a string | that `PYTHONHASHSEED` is the cause |
 | **Time bombs** | breaks on the last day of the month, on Feb 29, in another timezone | the exact date/timezone, *before* it happens |
-| **Sleep used as a wait** | `sleep(0.06)` then assert a thread finished | the exact `sleep()` line that will fail on a slow CI machine |
+| **Sleep used as a wait** | `sleep(0.15)` then assert a thread finished | the exact `sleep()` line that will fail on a slow CI machine |
 | **Race conditions** | unlocked read-modify-write from threads | that it fails when threads interleave |
 
 ## Quickstart
