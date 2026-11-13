@@ -46,6 +46,11 @@ problem. The same results as a Markdown report: [docs/example-report.md](https:/
 
 > ⚠️ flakehound **runs your test suite** (many times). Only run it on code you trust.
 
+Tried on real suites: [click](https://github.com/pallets/click) (2,648 tests, about 1
+minute), [attrs](https://github.com/python-attrs/attrs) (1,412 tests, about 2 minutes) and
+[python-dateutil](https://github.com/dateutil/dateutil) (5,344 tests), on Windows with 8
+parallel runs.
+
 ### Options
 
 | Option | Meaning |
@@ -61,7 +66,7 @@ problem. The same results as a Markdown report: [docs/example-report.md](https:/
 | `--no-probes` | Skip all probe runs (timezones, risky dates, timing) |
 | `--no-timing` | Skip only the timing probes |
 | `--no-step-summary` | Don't add the report to the GitHub Actions job summary |
-| `--timeout S` | Kill a single run after S seconds (default 600) |
+| `--timeout S` | Kill a single run after S seconds (default 600); the report names the test it was stuck in |
 | `-- ARGS` | Anything after `--` goes straight to pytest |
 
 Exit codes: `0` no problems, `1` problems found (by default only flaky tests and *confirmed*
@@ -144,6 +149,9 @@ flakehound changes **one factor at a time**, like a science experiment:
 6. **Time bomb probes.** Runs with the baseline's exact order and seeds, but in UTC+14,
    UTC−12, just before midnight, on the last day of the month, on New Year's Eve and on
    Feb 29. The clock is *shifted*, not frozen, so code that waits on time still works.
+   Timezone findings are cross-checked with `TZ` set to your machine's *own* offset, so a
+   test that only breaks because `TZ` is set isn't blamed on the time difference. A probe
+   failure that never happens again when the test is re-run alone isn't reported at all.
 7. **Timing probes.** One run where every `sleep()` on the test's main thread is 20×
    shorter (background work keeps its real speed, like a slow machine), and one where
    threads switch far more often. Then one `sleep()` call site at a time, to find the line.
@@ -168,6 +176,11 @@ never loads into your normal pytest runs on its own.
 
 - Python + pytest only, for now.
 - `asyncio.sleep` is not shortened by the timing probes.
+- On Windows with Python 3.10, a sleep can't be shorter than ~15 ms, so very short
+  "sleep used as a wait" bugs may be missed there (Python 3.11+ is fine).
+- Hypothesis chooses its own random inputs, so a flaky property test is found but its
+  failing input isn't replayed by flakehound's seeds.
+- If your computer sleeps during a hunt, the runs in progress are reported as timed out.
 - State hidden in fixtures, databases or external services can't be seen by the leak
   detector; the report says so instead of guessing.
 - Thread stress exposes races that happen around Python function calls.
