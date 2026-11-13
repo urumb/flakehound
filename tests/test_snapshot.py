@@ -110,3 +110,124 @@ def test_env_snapshot_does_not_mutate_environment(project):
     before = dict(os.environ)
     snapshot.take(root)
     assert dict(os.environ) == before
+
+
+LAZY = """
+import functools
+
+class LazySettings:
+    # Like Django/DRF settings: values are copied into the instance on first access.
+    _defaults = {"ROUTERS": [], "PAGE_SIZE": 10}
+
+    def __getattr__(self, name):
+        if name not in self._defaults:
+            raise AttributeError(name)
+        value = self._defaults[name]
+        setattr(self, name, value)
+        return value
+
+class Router:
+    def __init__(self):
+        self._routers = None
+
+    @functools.cached_property
+    def routers(self):
+        if self._routers is None:
+            self._routers = []
+        return self._routers
+
+class Holder:
+    def __init__(self):
+        self.cutoff = 1000
+        self.text = "More than {count} items"
+
+settings = LazySettings()
+router = Router()
+api_settings = Holder()
+alias = settings  # the same object under a second name
+"""
+
+
+@pytest.fixture
+def lazy_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path / "lazyproj"
+    root.mkdir()
+    (root / "fh_lazymod.py").write_text(LAZY, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(root))
+    module = importlib.import_module("fh_lazymod")
+    yield root, module
+    sys.modules.pop("fh_lazymod", None)
+
+
+def test_lazy_caches_are_not_leaks(lazy_project):
+    root, mod = lazy_project
+
+    def touch():
+        _ = mod.settings.ROUTERS, mod.settings.PAGE_SIZE  # cached on first access
+        _ = mod.router.routers  # cached_property fills, backing field None -> []
+
+    assert _changes(root, touch) == {}
+
+
+def test_real_leak_on_object_is_still_reported(lazy_project):
+    root, mod = lazy_project
+
+    _ = mod.settings.PAGE_SIZE  # already cached before the test runs
+
+    def leak():
+        mod.settings.PAGE_SIZE = 99
+
+    changes = _changes(root, leak)
+    assert list(changes) == ["fh_lazymod.settings.PAGE_SIZE"]  # once, not also as alias
+    assert changes["fh_lazymod.settings.PAGE_SIZE"].after == "99"
+    assert mod.settings.PAGE_SIZE == 99  # taking snapshots changed nothing
+
+
+def test_snapshot_never_calls_getattr(lazy_project):
+    root, mod = lazy_project
+    snapshot.take(root)
+    assert "ROUTERS" not in vars(mod.settings)  # no lookup was triggered
+
+
+def test_replaced_object_keeps_value_changes_drops_disappearances(lazy_project):
+    root, mod = lazy_project
+
+    class Mock:
+        def __init__(self):
+            self.cutoff = 2
+
+    def swap():
+        mod.api_settings = Mock()
+
+    changes = _changes(root, swap)
+    assert "fh_lazymod.api_settings" in changes  # the swap itself
+    assert changes["fh_lazymod.api_settings.cutoff"].after == "2"  # real value change
+    assert "fh_lazymod.api_settings.text" not in changes  # old attribute "disappearing"
+
+
+def test_counters_and_testcase_bookkeeping_are_not_leaks(tmp_path, monkeypatch):
+    root = tmp_path / "countproj"
+    root.mkdir()
+    (root / "fh_countmod.py").write_text(
+        "import unittest\n"
+        "class Field:\n"
+        "    _creation_counter = 0\n"
+        "    def __init__(self):\n"
+        "        Field._creation_counter += 1\n"
+        "class MyTests(unittest.TestCase):\n"
+        "    pass\n"
+        "count = 0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(root))
+    mod = importlib.import_module("fh_countmod")
+    try:
+
+        def run():
+            mod.Field()
+            mod.MyTests.client = object()  # like Django's setUpClass
+            mod.count += 1  # public: a real leak
+
+        assert list(_changes(root, run)) == ["fh_countmod.count"]
+    finally:
+        sys.modules.pop("fh_countmod", None)

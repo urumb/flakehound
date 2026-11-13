@@ -131,3 +131,28 @@ def test_exception_group_message_shows_the_errors(make_project, tmp_path: Path):
     [test] = result.results
     assert "KeyError" in test.message
     assert not any(line.lstrip().startswith("+--") for line in test.message.splitlines())
+
+
+def test_rerun_of_a_timed_test_gets_a_short_time_limit(make_project, tmp_path: Path):
+    root = make_project({"tests/test_quick.py": "def test_quick():\n    pass\n"})
+    runner = PytestRunner(root, procs=ProcessRegistry(), timeout=600)
+    spec = RunSpec(0, ["tests/test_quick.py::test_quick"], 1)
+    assert runner._timeout_for(spec) == 600  # never timed yet: the full limit
+    runner.run(spec, tmp_path)
+    limit = runner._timeout_for(spec)
+    assert limit is not None and 60 <= limit < 120  # floor + collection + 10x duration
+    unknown = RunSpec(1, ["tests/test_quick.py::test_other"], 1)
+    assert runner._timeout_for(unknown) == 600
+
+
+def test_parallel_timeout_hint(make_project):
+    from flakehound.core.models import RunResult as RR
+    from flakehound.session import Report
+
+    def report(workers: int, error: str) -> Report:
+        crashed = RR(RunSpec(0, [], 1), [], 1, 1.0, True, error)
+        return Report("pytest", 1, 1, workers, [], 1.0, [], [crashed])
+
+    assert "-j 1" in report(8, "run timed out after 600s").parallel_timeout_hint
+    assert report(1, "run timed out after 600s").parallel_timeout_hint == ""
+    assert report(8, "worker exited with code 3").parallel_timeout_hint == ""

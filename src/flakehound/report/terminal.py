@@ -245,6 +245,8 @@ def print_report(console: Console, report: Report) -> None:
             highlight=False,
         )
     if report.crashed_runs:
+        if report.parallel_timeout_hint:
+            console.print(f"[yellow]{escape(report.parallel_timeout_hint)}[/]", highlight=False)
         console.print()
 
     sym = _sym(console)

@@ -49,6 +49,17 @@ class Report:
     def crashed_runs(self) -> list[RunResult]:
         return [r for r in self.run_results + self.probe_results if r.crashed]
 
+    @property
+    def parallel_timeout_hint(self) -> str:
+        """Advice when runs timed out while several ran at once (a common cause)."""
+        if self.workers <= 1 or not any("timed out" in r.error for r in self.crashed_runs):
+            return ""
+        return (
+            "Runs timed out while several ran in parallel. If your tests use fixed network "
+            "ports (e.g. a test server on port 8000), one shared database or other shared "
+            "resources outside the project, parallel runs collide: try `-j 1`."
+        )
+
     def _probe_outcome(self, i: int) -> dict[str, Any]:
         if i >= len(self.probe_results):
             return {"ran": False}

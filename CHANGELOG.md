@@ -6,7 +6,24 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
 
 ## [Unreleased]
 
+From running flakehound on Django REST framework and httpx.
+
+### Added
+- Date findings get a control run with the clock shifted to an ordinary day. A test that
+  fails there too (it breaks whenever the clock moves, e.g. because code saved `time.time`
+  before tests started) is reported as suspected, "not a date bug", instead of as a time bomb.
+- Re-runs of tests that were already timed get a time limit that fits them (60 s + 3x
+  collection + 10x their duration) instead of the full `--timeout`.
+- When runs time out while running in parallel, the report suggests `-j 1` (fixed ports and
+  shared databases collide).
+
 ### Fixed
+- Leaked-state reports no longer list caches as leaks: values copied into settings objects on
+  first use (Django, DRF), `cached_property` values and their backing fields, private counters
+  that only go up, and `TestCase` class bookkeeping. When a test swaps a whole object for a
+  mock, the old object's attributes "disappearing" are no longer listed. In Django REST
+  framework this turned 25 noisy lines into the one real leak (`api_settings` left patched).
+- Snapshots never call an object's `__getattr__`, so taking one can't change test state.
 - Failure messages from exception groups (Hypothesis, Python 3.11+) showed only a
   `+-----` frame line; they now show the actual error.
 

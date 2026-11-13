@@ -27,6 +27,10 @@ PLUGIN = "flakehound.adapters.pytest.plugin"
 
 # Plugins that reorder tests would fight our ordering, and quarantine would hide
 # the very failures we are hunting.
+# Re-runs of tests already timed get FLOOR + 3x collection + FACTOR x their durations.
+TIMEOUT_FLOOR = 60.0
+TIMEOUT_FACTOR = 10.0
+
 _BLOCKED_PLUGINS = ("randomly", "random_order", "cacheprovider", "flakehound-quarantine")
 
 
@@ -50,6 +54,10 @@ class PytestRunner:
         self.timeout = timeout
         self.base_env = dict(os.environ if base_env is None else base_env)
         self._xdist: bool | None = None
+        # Longest duration seen per test, and how long collection takes: used to
+        # give small re-runs a time limit that fits them (see _timeout_for).
+        self._durations: dict[str, float] = {}
+        self._collect_secs = 0.0
 
     @property
     def has_xdist(self) -> bool:
@@ -92,12 +100,14 @@ class PytestRunner:
 
     def collect(self, workdir: Path) -> list[str]:
         out = workdir / "collected.json"
+        start = time.perf_counter()
         res = self.procs.run(
             self._command("--collect-only", f"--flakehound-collect-out={out}"),
             cwd=self.project_dir,
             env=self._env(),
             timeout=self.timeout,
         )
+        self._collect_secs = time.perf_counter() - start
         if res.timed_out:
             raise CollectionError("pytest collection timed out")
         # Exit code 5 = no tests collected, which is not an error for us.
@@ -107,16 +117,32 @@ class PytestRunner:
         ids = json.loads(out.read_text(encoding="utf-8"))
         return [str(x) for x in ids]
 
+    def _timeout_for(self, spec: RunSpec) -> float | None:
+        """The run's time limit: ``--timeout``, or less when every test in it has been
+        timed before. A stuck re-run of one test then costs about a minute, not ten."""
+        if self.timeout is None:
+            return None
+        known = [self._durations.get(t) for t in spec.order]
+        if not known or any(d is None for d in known):
+            return self.timeout
+        budget = (
+            TIMEOUT_FLOOR
+            + 3 * self._collect_secs
+            + TIMEOUT_FACTOR * sum(d for d in known if d is not None)
+        )
+        return min(self.timeout, budget)
+
     def run(self, spec: RunSpec, workdir: Path) -> RunResult:
         spec_path = workdir / f"spec-{spec.run_id}.json"
         out_path = workdir / f"result-{spec.run_id}.json"
         spec_path.write_text(json.dumps(spec.to_json()), encoding="utf-8")
         start = time.perf_counter()
+        timeout = self._timeout_for(spec)
         res = self.procs.run(
             self._command(f"--flakehound-spec={spec_path}", f"--flakehound-out={out_path}"),
             cwd=self.project_dir,
             env=self._env(spec),
-            timeout=self.timeout,
+            timeout=timeout,
         )
         duration = time.perf_counter() - start
         results: list[TestResult] = []
@@ -130,10 +156,12 @@ class PytestRunner:
                 for nodeid, changes in data.get("state_changes", {}).items()
             }
             sleep_sites = {str(k): list(v) for k, v in data.get("sleep_sites", {}).items()}
+            for r in results:
+                self._durations[r.nodeid] = max(r.duration, self._durations.get(r.nodeid, 0.0))
         crashed = res.timed_out or not out_path.exists()
         error = ""
         if res.timed_out:
-            error = f"run timed out after {self.timeout:.0f}s"
+            error = f"run timed out after {timeout or 0:.0f}s"
             current = current_test_path(out_path)
             if current.exists():
                 hung = current.read_text(encoding="utf-8", errors="replace").strip()

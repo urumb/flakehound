@@ -199,3 +199,37 @@ def test_probe_failure_that_never_repeats_is_not_reported(make_project, monkeypa
     victim = "tests/test_once.py::test_one_off_failure"
     assert any(failed(r, victim) for r in report.probe_results)  # it did fail once
     assert report.latent == []
+
+
+CLOCK_SHIFT = """
+import os
+import tempfile
+import time
+
+def test_file_time_matches_clock():
+    # File timestamps are not shifted, so any clock shift breaks this, whatever the date.
+    fd, path = tempfile.mkstemp()
+    os.close(fd)
+    try:
+        assert abs(os.path.getmtime(path) - time.time()) < 3600
+    finally:
+        os.unlink(path)
+"""
+
+
+def test_failing_on_any_clock_shift_is_not_called_a_date_bug(make_project):
+    root = make_project({"tests/test_shift.py": CLOCK_SHIFT})
+    report = _session(root, runs=2, seed=1)
+    [diag] = report.latent
+    assert diag.cause is EnvCause.CLOCK
+    assert not diag.confirmed
+    assert "whenever the clock is shifted" in diag.condition
+    assert "not a date bug" in diag.note
+    assert any("ordinary day" in e for e in diag.evidence)
+
+
+def test_ordinary_day_probe():
+    from flakehound.detectors.probes import ordinary_day_probe
+
+    assert ordinary_day_probe(date(2026, 11, 30)).clock == "2026-12-15T12:00:00"
+    assert ordinary_day_probe(date(2026, 12, 31)).clock == "2027-01-15T12:00:00"

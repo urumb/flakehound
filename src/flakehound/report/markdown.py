@@ -119,6 +119,8 @@ def render(report: Report) -> str:
     crashed = report.crashed_runs
     if crashed:
         out += [f"_{len(crashed)} run(s) did not finish; see the JSON report._", ""]
+        if report.parallel_timeout_hint:
+            out += [f"_{report.parallel_timeout_hint}_", ""]
     out += [
         f"<sub>flakehound {__version__} · replay this session: "
         f"{code(f'flakehound run --seed {report.master_seed} -n {report.runs}')}</sub>",

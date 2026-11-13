@@ -25,6 +25,7 @@ import re
 import reprlib
 import sys
 import types
+import unittest
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,6 +90,9 @@ def safe_repr(value: object) -> str:
 class Snapshot:
     values: dict[tuple[str, str], str] = field(default_factory=dict)  # (kind, name) -> repr
     files: dict[str, tuple[int, int]] = field(default_factory=dict)  # path -> (size, mtime)
+    # Names whose appearance is just a cache filling in (see _cache_names); a change
+    # from "missing" (or None, for a lazy backing field) to a value is not a leak.
+    caches: set[str] = field(default_factory=set)
 
 
 def _is_project_module(name: str, module: types.ModuleType, root: str) -> bool:
@@ -111,8 +115,54 @@ def _plain_attrs(obj: object) -> Iterator[tuple[str, object]]:
         yield key, value
 
 
-def _module_state(root: Path) -> Iterator[tuple[str, str, str]]:
+def _is_cached_property(cls: type, name: str) -> bool:
+    attr = None
+    for klass in getattr(cls, "__mro__", ()):
+        if name in vars(klass):
+            attr = vars(klass)[name]
+            break
+    return attr is not None and "cached_property" in type(attr).__name__
+
+
+def _is_lazy_property(cls: type, name: str) -> bool:
+    for klass in getattr(cls, "__mro__", ()):
+        if name in vars(klass):
+            attr = vars(klass)[name]
+            return isinstance(attr, property) or "cached_property" in type(attr).__name__
+    return False
+
+
+def _cache_names(obj: object, prefix: str) -> Iterator[str]:
+    """Attributes of ``obj`` that are caches rather than state a test could leak.
+
+    * ``functools.cached_property`` (or Django's) values;
+    * ``_x`` backing fields of a ``property``/``cached_property`` named ``x``
+      (lazy initialisation: ``None`` until first use);
+    * on objects with a custom ``__getattr__`` (Django and DRF settings), values
+      that appear in the instance: they are copied there on first access. A value
+      set there by a test for the very first time is missed (stated limit); a
+      change to an existing value is still reported.
+    """
+    cls = type(obj)
+    custom_getattr = getattr(cls, "__getattr__", None)
+    try:
+        attrs = list(vars(obj).items())[:_MAX_ATTRS]
+    except TypeError:
+        return
+    for key, _value in attrs:
+        backing_field = key.startswith("_") and not key.startswith("__")
+        if _is_cached_property(cls, key) or (backing_field and _is_lazy_property(cls, key[1:])):
+            yield f"{prefix}.{key}"
+        elif custom_getattr is not None:
+            # Never call __getattr__ here: lookups like these write to the object,
+            # and a snapshot must not change anything. Values appearing out of
+            # nowhere are treated as cache fills; changes to existing ones still show.
+            yield f"{prefix}.{key}"
+
+
+def _module_state(root: Path, caches: set[str] | None = None) -> Iterator[tuple[str, str, str]]:
     root_s = canon(str(root))
+    seen: set[int] = set()  # objects imported under several names are looked into once
     for mod_name, module in list(sys.modules.items()):
         if module is None or not _is_project_module(mod_name, module, root_s):
             continue
@@ -122,6 +172,8 @@ def _module_state(root: Path) -> Iterator[tuple[str, str, str]]:
             if isinstance(value, type):
                 if getattr(value, "__module__", None) != mod_name:
                     continue  # imported class: owned by another module
+                if issubclass(value, unittest.TestCase):
+                    continue  # setUpClass bookkeeping (client, atomics...), not shared state
                 for key, cval in _plain_attrs(value):
                     yield "class_attr", f"{mod_name}.{attr}.{key}", safe_repr(cval)
                 continue
@@ -130,8 +182,14 @@ def _module_state(root: Path) -> Iterator[tuple[str, str, str]]:
             yield "global", f"{mod_name}.{attr}", safe_repr(value)
             # One level into plain objects: catches app.state.CURRENCY = "EUR".
             if not isinstance(value, (str, bytes, int, float, bool, list, dict, set, tuple)):
+                if id(value) in seen:
+                    continue
+                seen.add(id(value))
+                prefix = f"{mod_name}.{attr}"
+                if caches is not None:
+                    caches.update(_cache_names(value, prefix))
                 for key, aval in _plain_attrs(value):
-                    yield "global", f"{mod_name}.{attr}.{key}", safe_repr(aval)
+                    yield "global", f"{prefix}.{key}", safe_repr(aval)
 
 
 def _files(root: Path) -> dict[str, tuple[int, int]]:
@@ -161,7 +219,7 @@ def _env_value(name: str, value: str) -> str:
 def take(root: Path) -> Snapshot:
     snap = Snapshot()
     v = snap.values
-    for kind, name, rep in _module_state(root):
+    for kind, name, rep in _module_state(root, snap.caches):
         v[(kind, name)] = rep
     for key, value in os.environ.items():
         if key not in _IGNORED_ENV:
@@ -181,13 +239,43 @@ def take(root: Path) -> Snapshot:
     return snap
 
 
+def _is_private_counter(name: str, old: str, new: str) -> bool:
+    """A private integer that only went up: an id/creation counter, not a leak."""
+    if not name.rpartition(".")[2].startswith("_"):
+        return False
+    try:
+        return int(new) > int(old)
+    except ValueError:
+        return False
+
+
 def diff(before: Snapshot, after: Snapshot) -> list[StateChange]:
     changes: list[StateChange] = []
+    caches = before.caches | after.caches
     for key in sorted(set(before.values) | set(after.values)):
         old = before.values.get(key, MISSING)
         new = after.values.get(key, MISSING)
-        if old != new:
-            changes.append(StateChange(key[0], key[1], old, new))
+        if old == new:
+            continue
+        if key[1] in caches and old in (MISSING, "None"):
+            continue  # a cache filling in, not a leak
+        if _is_private_counter(key[1], old, new):
+            continue  # e.g. Field._creation_counter: 166 -> 171 (counts objects made)
+        changes.append(StateChange(key[0], key[1], old, new))
+    # If a test replaced a whole object (e.g. settings swapped for a mock), the old
+    # object's attributes "disappearing" is noise; real value changes stay.
+    replaced = {
+        c.name for c in changes if c.kind == "global" and MISSING not in (c.before, c.after)
+    }
+    changes = [
+        c
+        for c in changes
+        if not (
+            c.kind == "global"
+            and MISSING in (c.before, c.after)
+            and c.name.rpartition(".")[0] in replaced
+        )
+    ]
     for path in sorted(set(before.files) | set(after.files)):
         old_f = before.files.get(path)
         new_f = after.files.get(path)

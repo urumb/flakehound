@@ -48,8 +48,9 @@ problem. The same results as a Markdown report: [docs/example-report.md](https:/
 
 Tried on real suites: [click](https://github.com/pallets/click) (2,648 tests, about 1
 minute), [attrs](https://github.com/python-attrs/attrs) (1,412 tests, about 2 minutes) and
-[python-dateutil](https://github.com/dateutil/dateutil) (5,344 tests), on Windows with 8
-parallel runs.
+[python-dateutil](https://github.com/dateutil/dateutil) (5,344 tests) and
+[Django REST framework](https://github.com/encode/django-rest-framework) (1,670 tests, about
+5 minutes; found and verified real order dependencies), on Windows with 8 parallel runs.
 
 ### Options
 
@@ -149,8 +150,9 @@ flakehound changes **one factor at a time**, like a science experiment:
 6. **Time bomb probes.** Runs with the baseline's exact order and seeds, but in UTC+14,
    UTC−12, just before midnight, on the last day of the month, on New Year's Eve and on
    Feb 29. The clock is *shifted*, not frozen, so code that waits on time still works.
-   Timezone findings are cross-checked with `TZ` set to your machine's *own* offset, so a
-   test that only breaks because `TZ` is set isn't blamed on the time difference. A probe
+   Findings are cross-checked against a harmless version of the same change (`TZ` set to
+   your machine's *own* offset; the clock shifted to an ordinary day), so a test that breaks
+   whenever `TZ` is set or the clock moves isn't blamed on a timezone or date. A probe
    failure that never happens again when the test is re-run alone isn't reported at all.
 7. **Timing probes.** One run where every `sleep()` on the test's main thread is 20×
    shorter (background work keeps its real speed, like a slow machine), and one where
@@ -181,6 +183,12 @@ never loads into your normal pytest runs on its own.
 - Hypothesis chooses its own random inputs, so a flaky property test is found but its
   failing input isn't replayed by flakehound's seeds.
 - If your computer sleeps during a hunt, the runs in progress are reported as timed out.
+- Runs happen in parallel, so tests that use a **fixed network port** (e.g. a test server on
+  port 8000) or one shared database collide and time out. flakehound says so in the report;
+  use `-j 1` for such suites.
+- On settings-style objects that fill in values on first use (Django and DRF settings), a
+  value a test sets there for the very first time isn't named as the leak (the polluter test
+  still is). Changes to existing values are named.
 - State hidden in fixtures, databases or external services can't be seen by the leak
   detector; the report says so instead of guessing.
 - Thread stress exposes races that happen around Python function calls.

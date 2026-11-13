@@ -21,7 +21,12 @@ from typing import Any
 from flakehound.adapters.base import Runner
 from flakehound.core.executor import Executor
 from flakehound.core.models import Repro, RunResult, RunSpec
-from flakehound.detectors.probes import Probe, describe_clock, local_offset_probe
+from flakehound.detectors.probes import (
+    Probe,
+    describe_clock,
+    local_offset_probe,
+    ordinary_day_probe,
+)
 from flakehound.diagnosis.common import failed, request, verify_repro
 
 SEED_PAIRS = 2
@@ -99,6 +104,12 @@ _TZ_SETTING_FIX = (
     "the test (or the code) behaves differently when the `TZ` environment variable is set: "
     "make it independent of `TZ`, or set/unset `TZ` explicitly in the test "
     '(e.g. `monkeypatch.delenv("TZ", raising=False)`)'
+)
+
+_CLOCK_SHIFT_FIX = (
+    "probably nothing to fix in the date logic; if the code keeps a reference to "
+    "`time.time` (e.g. `timer = time.time` in a class), the test is just sensitive to "
+    "clock changes: inject the clock or freeze it in the test"
 )
 
 _CLOCK_FIXES = {
@@ -254,20 +265,36 @@ def confirm_probe(
             )
             for _ in range(PROBE_TRIALS)
         ]
-    control = local_offset_probe() if any(p.kind == "timezone" for p in probes) else None
-    if control is not None:
+    # Controls: the same change, but harmless (TZ = this machine's own offset; the
+    # clock shifted to an ordinary day). Failing there too means the cause is the
+    # change itself, not the timezone or date.
+    kinds = {p.kind for p in probes}
+    controls = [
+        c
+        for c in (
+            local_offset_probe() if "timezone" in kinds else None,
+            ordinary_day_probe() if "clock" in kinds else None,
+        )
+        if c is not None
+    ]
+    for c in controls:
         reqs += [
             request(
                 baseline,
                 alone,
-                env={**baseline.env, **control.env},
-                label="probe-tz-control",
+                env={**baseline.env, **c.env},
+                clock=c.clock,
+                label=f"probe-{c.name}",
             )
             for _ in range(PROBE_TRIALS)
         ]
     results = [failed(r, victim) for r in executor.run_many(reqs)]
     base = results[0]
-    control_outs = results[1 + len(probes) * PROBE_TRIALS :]
+    first_control = 1 + len(probes) * PROBE_TRIALS
+    control_outs = {
+        c.kind: results[first_control + i * PROBE_TRIALS : first_control + (i + 1) * PROBE_TRIALS]
+        for i, c in enumerate(controls)
+    }
     confirmed_probes: list[Probe] = []
     evidence = []
     for i, probe in enumerate(probes):
@@ -304,15 +331,16 @@ def confirm_probe(
         if cause is EnvCause.TIMEZONE
         else _CLOCK_FIXES.get(main.name, _DATE_FIX.format(label=main.label))
     )
-    tz_setting = False
-    if control is not None and control_outs:
-        fails = sum(bool(o) for o in control_outs)
-        valid = sum(o is not None for o in control_outs)
-        diag.evidence.append(
-            f"alone, {control.label} ({control.env['TZ']}): failed {fails}/{valid}"
-        )
-        tz_setting = cause is EnvCause.TIMEZONE and valid > 0 and fails == valid
-    if tz_setting:
+    control = next((c for c in controls if c.kind == main.kind), None)
+    fails_in_control = False
+    if control is not None:
+        outs = control_outs[control.kind]
+        fails = sum(bool(o) for o in outs)
+        valid = sum(o is not None for o in outs)
+        detail = control.env.get("TZ") or describe_clock(control.clock or "")
+        diag.evidence.append(f"alone, {control.label} ({detail}): failed {fails}/{valid}")
+        fails_in_control = valid > 0 and fails == valid
+    if fails_in_control and cause is EnvCause.TIMEZONE:
         # Same offset as now, still fails: the time difference is not the problem.
         diag.condition = "when the TZ environment variable is set (even to the current offset)"
         diag.note = (
@@ -320,6 +348,15 @@ def confirm_probe(
             "set (or its format), not the time difference"
         )
         diag.fix = _TZ_SETTING_FIX
+    elif fails_in_control:
+        # An ordinary day fails too: the date is not the problem, shifting is.
+        diag.condition = "whenever the clock is shifted (even to an ordinary day)"
+        diag.note = (
+            "it also fails on an ordinary day, so this is not a date bug: the test probably "
+            "mixes the shifted clock with one flakehound can't shift (a time function saved "
+            "before tests started, a C extension or an external service)"
+        )
+        diag.fix = _CLOCK_SHIFT_FIX
     elif confirmed_probes and base is False:
         repro = Repro(alone, env=dict(main.env), clock=main.clock)
         diag.repro = runner.repro_command(repro)

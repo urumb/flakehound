@@ -99,6 +99,23 @@ def local_offset_probe(offset: timedelta | None = None) -> Probe:
     )
 
 
+def ordinary_day_probe(today: date | None = None) -> Probe:
+    """Control for date findings: the clock shifted to an ordinary moment.
+
+    Noon on the 15th of next month: no midnight, month end, year end or leap
+    day. If a test fails here too, it breaks because the clock was shifted at
+    all (often a clock read that flakehound cannot shift), not because of a date.
+    """
+    today = today or date.today()
+    year, month = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+    return Probe(
+        "ordinary_day",
+        "with the clock shifted to an ordinary day",
+        "clock",
+        clock=_at(date(year, month, 15), 12, 0, 0),
+    )
+
+
 def describe_clock(clock: str) -> str:
     dt = datetime.fromisoformat(clock)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
