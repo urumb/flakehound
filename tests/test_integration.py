@@ -1,6 +1,7 @@
 """End-to-end: real pytest subprocesses on generated projects."""
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -111,3 +112,22 @@ def test_cli_ok_and_usage_exit_codes(make_project, monkeypatch):
     monkeypatch.chdir(root)
     assert main(["run", "-n", "2"]) == EXIT_OK
     assert main(["run", "-n", "2", "tests/does_not_exist.py"]) == EXIT_USAGE
+
+
+def test_exception_group_message_shows_the_errors(make_project, tmp_path: Path):
+    # Exception groups (Hypothesis, Python 3.11+) are framed by "+----" lines; the
+    # message must show an actual error, not the frame.
+    body = (
+        "import sys\nimport pytest\n"
+        "@pytest.mark.skipif(sys.version_info < (3, 11), reason='needs ExceptionGroup')\n"
+        "def test_group():\n"
+        "    raise ExceptionGroup('several', [ValueError('bad value 42'), KeyError('k')])\n"
+    )
+    root = make_project({"tests/test_eg.py": body})
+    if sys.version_info < (3, 11):
+        pytest.skip("needs ExceptionGroup")
+    runner = PytestRunner(root, procs=ProcessRegistry(), timeout=120)
+    result = runner.run(RunSpec(0, ["tests/test_eg.py::test_group"], 1), tmp_path)
+    [test] = result.results
+    assert "KeyError" in test.message
+    assert not any(line.lstrip().startswith("+--") for line in test.message.splitlines())

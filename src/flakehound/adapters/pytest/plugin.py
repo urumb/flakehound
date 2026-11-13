@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import sys
 from collections.abc import Generator
 from pathlib import Path
@@ -220,8 +221,15 @@ def _phase_outcome(report: pytest.TestReport) -> Outcome | None:
 
 def _short_message(report: pytest.TestReport) -> str:
     text = report.longreprtext or ""
-    lines = text.strip().splitlines()[-_MESSAGE_LINES:]
-    return truncate(redact("\n".join(lines)))
+    # Exception groups (Hypothesis, Python 3.11+) are drawn inside "| " and "+----"
+    # frames; drop the framing so the message shows the actual errors.
+    lines = [_GROUP_PREFIX.sub("", line) for line in text.strip().splitlines()]
+    lines = [line for line in lines if line.strip() and not _GROUP_FRAME.fullmatch(line)]
+    return truncate(redact("\n".join(lines[-_MESSAGE_LINES:])))
+
+
+_GROUP_PREFIX = re.compile(r"^(?:\s*\|)+ ?")  # leading "| " of exception-group output
+_GROUP_FRAME = re.compile(r"\s*\+?[-+]{3,}.*")  # "+---------------- 1 ----------------"
 
 
 def _write_json(path: Path, data: Any) -> None:

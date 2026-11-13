@@ -6,6 +6,10 @@ project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions
 
 ## [Unreleased]
 
+### Fixed
+- Failure messages from exception groups (Hypothesis, Python 3.11+) showed only a
+  `+-----` frame line; they now show the actual error.
+
 ## [0.1.3] - 2026-11-13
 
 ### Security
